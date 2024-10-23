@@ -3,9 +3,9 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <sourceFolder url="file://$MODULE_DIR$/audio/process/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/main/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/dsp/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/audio/process/target" />
-      <excludeFolder url="file://$MODULE_DIR$/main/target" />
+      <excludeFolder url="file://$MODULE_DIR$/dsp/target" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
