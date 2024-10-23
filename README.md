@@ -46,5 +46,5 @@ In case of errors, appropriate messages will be logged, and the application will
 
 For processing with Rust, replacing the source code and the audio:
 ```bash
-./dsp --rust --code ../processing  --audio ../replace
+./playdsp --rust --code ../processing  --audio ../replace
 ```
