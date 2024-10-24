@@ -1,18 +1,18 @@
 mod constants;
 mod processing;
 
-use std::string::String;
-use constants::*;
-use clap::{Arg, ArgAction, Command};
-use rayon::prelude::*;
-use std::fs;
-use std::path::{Path, PathBuf};
+use crate::processing::rust_process_audio::rust_process;
 use bwavfile::{WaveFmt, WaveReader, WaveWriter};
-// use audio_process;
 use chrono::Local;
+use clap::{Arg, ArgAction, ArgMatches, Command};
+use constants::*;
+use rayon::prelude::*;
+use std::{env, fs};
 use std::fs::{copy, create_dir_all, remove_file};
 use std::io::{self, Error, Read};
-use crate::processing::rust_process_audio::rust_process;
+use std::path::{Path, PathBuf};
+use std::string::String;
+use std::process::{Command as cmd, exit};
 
 fn main() {
 
@@ -90,8 +90,120 @@ fn main() {
                 return;
             }
         }
+
+        run_recompile(&matches);
     }
 
+    process_audio_main(&matches, rust_present, cpp_present);
+
+}
+
+fn copy_processing_files() -> io::Result<()> {
+    let source_dir = Path::new("../audio/processing");
+    let destination_dir = Path::new("/usr/local/bin/playdsp/src/processing");
+
+    // Create the destination directory if it doesn't exist
+    if !destination_dir.exists() {
+        fs::create_dir_all(destination_dir)?;
+    }
+
+    // Iterate over the files in the source directory
+    for entry in fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+
+        // Only copy regular files
+        if file_type.is_file() {
+            let file_name = entry.file_name();
+            let destination_path = destination_dir.join(&file_name);
+            let destination_path_clone = destination_path.clone();
+            // Copy the file to the destination directory, replacing if it exists
+            copy(entry.path(), destination_path)?;
+            println!("Copied {:?} to {:?}", entry.path(), destination_path_clone);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_recompile(matches: &ArgMatches) { // Accept matches as a parameter
+    if let Err(e) = copy_processing_files() {
+        eprintln!("Failed to copy processing files: {}", e);
+        exit(1);
+    }
+
+    println!("Processing files copied successfully.");
+
+    println!("Recompiling code... (requires password)");
+    // Compile and install using sudo
+    let status = cmd::new("sudo")
+        .arg("cargo")
+        .arg("build")
+        .arg("--release")
+        .current_dir("/usr/local/bin/playdsp") // Set the working directory
+        .status()
+        .expect("Failed to run cargo build");
+
+    if !status.success() {
+        eprintln!("Failed to recompile");
+        exit(1);
+    }
+
+    // Copy the new binary
+    let status = cmd::new("sudo")
+        .arg("cp")
+        .arg("/usr/local/bin/playdsp/target/release/playdsp")
+        .arg("/usr/local/bin/playdsp/")
+        .status()
+        .expect("Failed to copy binary");
+
+    if !status.success() {
+        eprintln!("Failed to install the new binary");
+        exit(1);
+    }
+
+    println!("Recompilation and installation complete.");
+
+    let new_binary_path = "/usr/local/bin/playdsp/playdsp"; // Path to the new binary
+
+    // Get the current directory
+    let current_dir = env::current_dir().expect("Failed to get current directory");
+    let current_dir_str = current_dir.to_str().expect("Failed to convert path to string");
+
+    // Start building the new terminal command
+    let mut new_terminal_command = format!(
+        "osascript -e 'tell application \"Terminal\" to do script \"cd {} && sudo {}",
+        current_dir_str, new_binary_path
+    );
+
+    // Check for Rust and C++ flags and append them to the command if they exist
+    if matches.contains_id("rust") {
+        new_terminal_command.push_str(" --rust");
+    }
+    if matches.contains_id("cpp") {
+        new_terminal_command.push_str(" --cpp");
+    }
+
+    // Check for audio file argument and append it to the command if it exists
+    if let Some(audio_path) = matches.get_one::<String>(AUDIO_FILE_PATH_NAME) {
+        new_terminal_command.push_str(&format!(" --audio {}\"'", audio_path));
+    } else {
+        new_terminal_command.push_str("\"'"); // Close the string properly
+    }
+
+    // Start a new terminal and run the new process in the current directory
+    if let Ok(_) = cmd::new("sh").arg("-c").arg(new_terminal_command).spawn() {
+        println!("Started new instance of playdsp in a new terminal.");
+    } else {
+        println!("Failed to open new terminal.");
+    }
+
+    // Exit the current process
+    println!("Exiting current process.");
+    exit(0);
+}
+
+fn process_audio_main(matches: &ArgMatches, rust_present : bool, cpp_present: bool) {
     if let Some(input_folder) = matches.get_one::<String>(AUDIO_FILE_PATH_NAME) {
         if let Err(e) = replace_audio_files(input_folder) {
             eprintln!("Error replacing audio files: {}", e);
@@ -149,7 +261,7 @@ fn create_folders_and_copy_files(base_dir: &str) {
     create_dir_all(&source_dir).expect(&*("Failed to create '".to_owned() + SOURCE_NAME + "' directory"));
 
     let rust_file_content =
-        r#"pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
+r#"pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
     let gain_raw = 10.0_f64.powf(-12.0 / 20.0);
 
     for (in_channel, out_channel) in input.iter().zip(output.iter_mut()) {
@@ -160,7 +272,7 @@ fn create_folders_and_copy_files(base_dir: &str) {
 }"#;
 
     let cpp_file_content =
-        r#"#include <cstddef>
+r#"#include <cstddef>
 #include <cmath>
 
 extern "C" void cpp_process(const double* input, size_t num_channels, size_t num_samples, double* output) {
