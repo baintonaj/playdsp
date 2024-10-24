@@ -1,15 +1,18 @@
 mod constants;
+mod processing;
+
 use std::string::String;
 use constants::*;
 use clap::{Arg, ArgAction, Command};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use bwavfile::{WaveFmt, WaveWriter, WaveReader};
-use audio_process;
+use bwavfile::{WaveFmt, WaveReader, WaveWriter};
+// use audio_process;
 use chrono::Local;
 use std::fs::{copy, create_dir_all, remove_file};
 use std::io::{self, Error, Read};
+use crate::processing::rust_process_audio::rust_process;
 
 fn main() {
 
@@ -17,6 +20,19 @@ fn main() {
         .version("0.1.0")
         .author("Andy Bainton <baintonaj@gmail.com>")
         .about("Compiles Rust and/or C++ files in release mode, and processes multiple audio files concurrently")
+        .subcommand(
+            Command::new("new")
+                .about("Creates new folder structure for DSP processing")
+                .arg(
+                    Arg::new("dir")
+                        .short('d')
+                        .long("dir")
+                        .help("Optional base directory to create subfolders")
+                        .required(false)
+                        .num_args(1)
+                        .action(ArgAction::Set)
+                )
+        )
         .arg(Arg::new("rust")
             .short('r')
             .long("rust")
@@ -46,6 +62,13 @@ fn main() {
             .num_args(1)
             .action(ArgAction::Set))
         .get_matches();
+
+    if let Some(sub_matches) = matches.subcommand_matches("new") {
+        let dot = &".".to_string();
+        let base_dir = sub_matches.get_one::<String>("dir").unwrap_or(dot);
+        create_folders_and_copy_files(base_dir);
+        return;
+    }
 
     let rust_present = matches.contains_id("rust");
     let cpp_present = matches.contains_id("cpp");
@@ -86,8 +109,6 @@ fn main() {
 
     let audio_files_to_process = get_audio_files_from_folder(SOURCE_NAME);
 
-    create_dir_all(RESULT_NAME).expect(format!("Failed to create {} directory", RESULT_NAME).as_str());
-
     let mut rust_files: Vec<String> = vec![];
     let mut cpp_files: Vec<String> = vec![];
 
@@ -116,10 +137,54 @@ fn main() {
     }
 }
 
+fn create_folders_and_copy_files(base_dir: &str) {
+    let audio_dir = Path::new(base_dir).join(AUDIO_NAME);
+    let processing_dir = audio_dir.join(PROCESSING_NAME);
+    let result_dir = audio_dir.join(RESULT_NAME);
+    let source_dir = audio_dir.join(SOURCE_NAME);
+
+    create_dir_all(&audio_dir).expect(&*("Failed to create '".to_owned() + AUDIO_NAME + "' parent directory"));
+    create_dir_all(&processing_dir).expect(&*("Failed to create '".to_owned() + PROCESSING_NAME + "' directory"));
+    create_dir_all(&result_dir).expect(&*("Failed to create '".to_owned() + RESULT_NAME + "' directory"));
+    create_dir_all(&source_dir).expect(&*("Failed to create '".to_owned() + SOURCE_NAME + "' directory"));
+
+    let rust_file_content =
+        r#"pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
+    let gain_raw = 10.0_f64.powf(-12.0 / 20.0);
+
+    for (in_channel, out_channel) in input.iter().zip(output.iter_mut()) {
+        for (in_sample, out_sample) in in_channel.iter().zip(out_channel.iter_mut()) {
+            *out_sample = in_sample * gain_raw;
+        }
+    }
+}"#;
+
+    let cpp_file_content =
+        r#"#include <cstddef>
+#include <cmath>
+
+extern "C" void cpp_process(const double* input, size_t num_channels, size_t num_samples, double* output) {
+    double gain_raw = std::pow(10.0, -12.0 / 20.0);
+    std::size_t total_samples = num_channels * num_samples;
+
+    for (std::size_t i = 0; i < total_samples; ++i) {
+        output[i] = input[i] * gain_raw;
+    }
+}"#;
+
+    let rust_file_path = processing_dir.join("rust_process_audio.rs");
+    let cpp_file_path = processing_dir.join("cpp_process_audio.cpp");
+
+    // Write Rust and C++ processing files in the "processing" folder
+    fs::write(&rust_file_path, rust_file_content).expect("Failed to write Rust file");
+    fs::write(&cpp_file_path, cpp_file_content).expect("Failed to write C++ file");
+
+    println!("Created folder structure and placed processing files in {}", audio_dir.display());
+}
+
 fn get_audio_files_from_folder(source: &str) -> Vec<String> {
     let path = Path::new(source);
     if path.is_dir() {
-        // If it's a directory, collect all .wav files in the folder
         fs::read_dir(source)
             .unwrap()
             .filter_map(|entry| {
@@ -133,7 +198,6 @@ fn get_audio_files_from_folder(source: &str) -> Vec<String> {
             })
             .collect()
     } else {
-        // If it's a file, return it as a single entry in a Vec
         vec![source.to_string()]
     }
 }
@@ -178,12 +242,10 @@ fn process_and_copy_files(folder_path: &str, file_type: &str) -> io::Result<()> 
         let file_path = file.to_str().unwrap();
         let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
 
-        // Copy based on the provided file_type
         if (file_type == "rust" && file_name == "rust_process_audio.rs") ||
             (file_type == "cpp" && file_name == "cpp_process_audio.cpp") ||
             (file_type == "both" && (file_name == "rust_process_audio.rs" || file_name == "cpp_process_audio.cpp")) {
 
-            // Validate and copy only the matching files
             if validate_file(file_path)? {
                 copy_to_processing_folder(file_path)?;
             } else {
@@ -204,7 +266,6 @@ fn get_files_from_folder(folder_path: &str) -> io::Result<Vec<PathBuf>> {
         let path = entry.path();
         let file_name = path.file_name().unwrap().to_str().unwrap_or("");
 
-        // Get only relevant files (Rust or C++)
         if file_name == "cpp_process_audio.cpp" || file_name == "rust_process_audio.rs" {
             valid_files.push(path);
         }
@@ -234,7 +295,7 @@ fn check_cpp_function_signature(file_path: &str) -> io::Result<bool> {
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
 
-    Ok(contents.contains("extern \"C\" void cpp_process_audio(const double* input, double* output, std::size_t num_samples, std::size_t num_channels)"))
+    Ok(contents.contains("extern \"C\" void cpp_process(const double* input, size_t num_channels, size_t num_samples, double* output)"))
 }
 
 fn check_rust_function_signature(file_path: &str) -> io::Result<bool> {
@@ -247,7 +308,7 @@ fn check_rust_function_signature(file_path: &str) -> io::Result<bool> {
 
 fn copy_to_processing_folder(file_path: &str) -> io::Result<()> {
     let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
-    let destination = format!("../audio/process/src/processing/{}", file_name);
+    let destination = format!("{}/{}", PROGRAM_FOLDER, file_name);
 
     copy(file_path, &destination)?;
     println!("File copied to: {}", destination);
@@ -277,11 +338,40 @@ fn get_program_files(folder: &str, extension: &str) -> Vec<String> {
 }
 
 fn rust_process_audio(buffer: &Vec<Vec<f64>>, processed_buffer: &mut Vec<Vec<f64>>) {
-    audio_process::rust_process(buffer, processed_buffer);
+    rust_process(buffer, processed_buffer);
 }
 
-fn cpp_process_audio_wrapper(buffer: &Vec<Vec<f64>>, processed_buffer: &mut Vec<Vec<f64>>) {
-    audio_process::cpp_process(buffer, processed_buffer);
+
+extern "C" {
+    fn cpp_process(
+        input: *const f64,
+        num_channels: usize,
+        num_samples: usize,
+        output: *mut f64,
+    );
+}
+
+pub fn cpp_process_audio_wrapper(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
+    let num_channels = input.len();
+    let num_samples = input[0].len();
+
+    let flattened_input: Vec<f64> = input.iter().flatten().copied().collect();
+    let mut flattened_output: Vec<f64> = vec![0.0; num_channels * num_samples];
+
+    unsafe {
+        cpp_process(
+            flattened_input.as_ptr(),
+            num_channels,
+            num_samples,
+            flattened_output.as_mut_ptr(),
+        );
+    }
+
+    for (i, channel) in output.iter_mut().enumerate() {
+        let start = i * num_samples;
+        let end = start + num_samples;
+        channel.copy_from_slice(&flattened_output[start..end]);
+    }
 }
 
 fn process_audio(input_path: &str, output_path: &str, program_file: &str) -> Result<(), String> {
@@ -405,7 +495,7 @@ fn process_multiple_audio_files(audio_files: Vec<String>, program_paths: Vec<Str
                 .unwrap_or("");
 
             if Path::new(&program_path).exists() {
-                let rs_output_file = format!("result/{}_processed_{}_{}.wav", audio_stem, current_time, program_suffix);
+                let rs_output_file = format!("{}/{}_processed_{}_{}.wav", RESULT_FOLDER, audio_stem, current_time, program_suffix);
                 if let Err(e) = process_audio(audio_file, &rs_output_file, &program_path) {
                     eprintln!("Error processing audio file {}: {}", audio_file, e);
                 } else {

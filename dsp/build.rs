@@ -1,5 +1,5 @@
 use cc;
-const PATH_TO_CPP_DSP: &str = "../audio/process/src/processing/cpp_process_audio.cpp";
+const PATH_TO_CPP_DSP: &str = "../dsp/src/processing/cpp_process_audio.cpp";
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("{}", "cargo:rerun-if-changed=".to_owned() + PATH_TO_CPP_DSP);

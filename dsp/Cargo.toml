@@ -7,7 +7,6 @@ edition = "2021"
 clap = "4.5.20"
 rayon = "1.10.0"
 bwavfile = "2.0.1"
-audio_process = { path = "../audio/process" }
 chrono = "0.4.38"
 
 [build-dependencies]

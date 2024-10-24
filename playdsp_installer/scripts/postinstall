@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Install Rust and Xcode if necessary
+command_exists () {
+    command -v "$1" >/dev/null 2>&1 ;
+}
+
+install_xcode_clang () {
+    if ! command_exists clang ; then
+        echo "Xcode Command Line Tools (Clang) not found. Installing..."
+        xcode-select --install
+    fi
+}
+
+install_rust () {
+    if ! command_exists rustc ; then
+        echo "Rust not found. Installing Rust..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    fi
+}
+
+# Call functions to ensure Rust and Xcode are installed
+install_xcode_clang
+install_rust
+
+# Copy the compiled binary to /usr/local/bin
+cp playdsp /usr/local/bin/
+
+# Set executable permissions
+chmod +x /usr/local/bin/playdsp
+
+echo "playdsp has been installed successfully!"

@@ -2,10 +2,10 @@
 <module type="EMPTY_MODULE" version="4">
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
-      <sourceFolder url="file://$MODULE_DIR$/audio/process/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/dsp/src" isTestSource="false" />
-      <excludeFolder url="file://$MODULE_DIR$/audio/process/target" />
+      <sourceFolder url="file://$MODULE_DIR$/dsp/src/process/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/dsp/target" />
+      <excludeFolder url="file://$MODULE_DIR$/dsp/src/process/target" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

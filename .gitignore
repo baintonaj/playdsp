@@ -1,2 +1,2 @@
 # Project exclude paths
-/audio/process/target/
+/dsp/src/process/target/
