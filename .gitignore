@@ -1,2 +1,3 @@
 # Project exclude paths
 /dsp/src/process/target/
+/playdsp_installer
