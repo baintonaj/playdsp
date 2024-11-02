@@ -2,9 +2,5 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
-<<<<<<< HEAD
-    <mapping directory="$PROJECT_DIR$" vcs="Git" />
-=======
->>>>>>> 7c5a69e (Refactored the general orgianization of the program, and swicthed the main directory for recompliation to Documents in macOS, rather than /usr/local/bin.)
   </component>
 </project>
