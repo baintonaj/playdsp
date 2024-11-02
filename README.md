@@ -67,12 +67,12 @@ playdsp new --dir /path/to/base
 
 For processing with Rust, **replacing** the source code and the audio:
 ```bash
-playdsp --rust --code ../path/to/code_processing --audio ../path/to/audio_replace
+sudo playdsp --rust --code ../path/to/code_processing --audio ../path/to/audio_replace
 ```
 
 For processing with both Rust and C++ code, **replacing** the source code and the audio:
 ```bash
-playdsp --code ../path/to/code_processing --audio ../path/to/audio_replace
+sudo playdsp --code ../path/to/code_processing --audio ../path/to/audio_replace
 ```
 
 For processing with both Rust and C++ code, **maintaining** the source code and audio:
