@@ -1,3 +1,7 @@
+<<<<<<< HEAD
 # Project exclude paths
 /dsp/src/process/target/
 /playdsp_installer
+=======
+/target
+>>>>>>> 7c5a69e (Refactored the general orgianization of the program, and swicthed the main directory for recompliation to Documents in macOS, rather than /usr/local/bin.)
