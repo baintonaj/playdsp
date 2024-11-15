@@ -5,7 +5,7 @@ use crate::constants::constants::*;
 use crate::external_processing::rust_process_audio::*;
 use bwavfile::{WaveFmt, WaveReader, WaveWriter};
 
-pub(crate) fn process_multiple_audio_files(audio_files: Vec<String>, program_paths: Vec<String>) {
+pub(crate) fn process_multiple_audio_files(audio_files: &Vec<String>, program_paths: &Vec<String>) {
     audio_files.par_iter().for_each(|audio_file| {
         let current_time = Local::now().format("%Y_%m_%d_%H_%M").to_string();
         let audio_stem = Path::new(audio_file).file_stem().unwrap().to_str().unwrap();
@@ -141,7 +141,6 @@ fn write_wav(output_path: &str, processed_samples: &Vec<Vec<f32>>, header: WaveF
 fn rust_process_audio(buffer: &Vec<Vec<f64>>, processed_buffer: &mut Vec<Vec<f64>>) {
     rust_process(buffer, processed_buffer);
 }
-
 
 extern "C" {
     fn cpp_process(

@@ -1,4 +1,6 @@
 mod file_processing;
+
+use std::process;
 use file_processing::code_processing::create_folders_and_copy_files::*;
 use file_processing::code_processing::process_and_copy_files::*;
 use file_processing::code_processing::get_program_files::*;
@@ -16,8 +18,9 @@ use constants::constants::*;
 use clap::{Arg, ArgAction, Command};
 
 fn main() {
+    println!("Hello world from playdsp! PID {}", process::id());
     let matches = Command::new("playdsp")
-        .version("0.1.0")
+        .version("0.1.4")
         .author("Andy Bainton <baintonaj@gmail.com>")
         .about("Compiles Rust and/or C++ files in release mode, and processes multiple audio files concurrently")
         .subcommand(
@@ -90,7 +93,6 @@ fn main() {
                 return;
             }
         }
-
         run_recompile(&matches);
     }
 
@@ -129,13 +131,13 @@ fn main() {
         let mut all_files = Vec::new();
         all_files.append(rust_files.as_mut());
         all_files.append(cpp_files.as_mut());
-        process_multiple_audio_files(audio_files_to_process, all_files);
+        process_multiple_audio_files(&audio_files_to_process, &all_files);
     } else if rust_present {
         println!("Rust files: {:?}", rust_files);
-        process_multiple_audio_files(audio_files_to_process, rust_files);
+        process_multiple_audio_files(&audio_files_to_process, &rust_files);
     } else if cpp_present {
         println!("C++ files: {:?}", cpp_files);
-        process_multiple_audio_files(audio_files_to_process, cpp_files);
+        process_multiple_audio_files(&audio_files_to_process, &cpp_files);
     }
 
 }
