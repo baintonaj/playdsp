@@ -1,121 +1,84 @@
 use crate::constants::constants::*;
 use clap::ArgMatches;
-use std::fs::copy;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::exit;
 use std::process::Command;
-use std::{fs, io, process};
+use std::{fs, io};
 
-fn get_documents_playdsp_path() -> Option<PathBuf> {
-    let home_dir = home::home_dir()?;
-    Some(home_dir.join("Documents").join("playdsp"))
-}
+const CARGO_TOML_TEMPLATE: &str = include_str!("../../templates/Cargo.toml.template");
+const BUILD_RS_TEMPLATE: &str = include_str!("../../templates/build.rs.template");
+const MAIN_RS_TEMPLATE: &str = include_str!("../../templates/main.rs.template");
 
-pub(crate) fn run_recompile(matches: &ArgMatches) {
-    let user_path =  get_documents_playdsp_path().unwrap().to_str().unwrap().to_owned();
+pub(crate) fn run_recompile(_matches: &ArgMatches) {
+    let audio_dir = Path::new("../audio");
+    let runtime_dir = audio_dir.join(".playdsp_runtime");
 
-    let playdsp_path = &(user_path.clone() + SRC_DIR);
+    println!("Setting up runtime environment...");
 
-    if let Err(e) = copy_processing_files(user_path.clone()) {
-        eprintln!("Failed to copy processing files: {}", e);
+    if let Err(e) = setup_runtime_project(&runtime_dir) {
+        eprintln!("Failed to setup runtime project: {}", e);
         exit(1);
     }
 
-    println!("Processing files copied successfully.");
+    println!("Runtime project setup complete.");
 
-    println!("Recompiling code...");
-    // Compile and install using sudo
+    // Check if user has Rust code to include
+    let processing_dir = Path::new(PROGRAM_FOLDER);
+    if let Err(e) = inject_user_rust_code(&runtime_dir, processing_dir) {
+        eprintln!("Failed to inject user Rust code: {}", e);
+        exit(1);
+    }
+
+    println!("Compiling runtime binary...");
     let status = Command::new("cargo")
         .arg("build")
         .arg("--release")
-        .current_dir(user_path.clone())
+        .current_dir(&runtime_dir)
         .status()
         .expect("Failed to run cargo build");
 
     if !status.success() {
-        eprintln!("Failed to recompile");
+        eprintln!("Failed to compile runtime");
         exit(1);
-    } else {
-        println!("Recompilation complete.");
     }
 
-    // Run the chmod command
-    let result = Command::new("chmod")
-        .arg("+x")
-        .arg(playdsp_path)
-        .status();
-
-    match result {
-        Ok(status) if status.success() => {
-            println!("playdsp made executable successfully.");
-        }
-        Ok(status) => {
-            eprintln!("Command failed with status: {}", status);
-        }
-        Err(err) => {
-            eprintln!("Failed to execute command: {}", err);
-        }
-    }
-
-    let mut args = vec![];
-
-    if matches.contains_id("rust") {
-        args.push("--rust");
-    }
-    if matches.contains_id("cpp") {
-        args.push("--cpp");
-    }
-    if let Some(audio_path) = matches.get_one::<String>(AUDIO_NAME) {
-        args.push("--audio");
-        args.push(audio_path);
-    }
-
-    let result = Command::new(playdsp_path)
-        .args(&args)
-        .spawn();
-
-    match result {
-        Ok(mut child) => {
-            if let Err(e) = child.wait() {
-                eprintln!("playdsp process failed to wait: {}", e);
-            } else {
-                println!("playdsp finished executing.");
-                // Optionally exit the current Rust process if needed
-            }
-        }
-        Err(err) => {
-            eprintln!("Failed to run playdsp: {}", err);
-        }
-    }
-
-    if matches.contains_id("code") {
-        println!("Exiting current process: PID {}", process::id());
-        exit(0);
-    }
+    println!("Compilation complete.");
+    println!("Runtime binary ready at: {:?}", runtime_dir.join("target/release/playdsp_runtime"));
 }
 
-fn copy_processing_files(user_path: String) -> io::Result<()> {
-    let source_dir = Path::new(PROGRAM_FOLDER);
+fn setup_runtime_project(runtime_dir: &Path) -> io::Result<()> {
+    fs::create_dir_all(runtime_dir)?;
+    fs::create_dir_all(runtime_dir.join("src"))?;
+    fs::write(runtime_dir.join("Cargo.toml"), CARGO_TOML_TEMPLATE)?;
+    fs::write(runtime_dir.join("build.rs"), BUILD_RS_TEMPLATE)?;
+    fs::write(runtime_dir.join("src/main.rs"), MAIN_RS_TEMPLATE)?;
+    println!("Created runtime project structure at {:?}", runtime_dir);
+    Ok(())
+}
 
-    let binding = user_path + DESTINATION_DIR;
-    let destination_dir = Path::new(&binding);
+fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Result<()> {
+    let main_rs_path = runtime_dir.join("src/main.rs");
+    let mut main_rs_content = fs::read_to_string(&main_rs_path)?;
+    let rust_process_file = processing_dir.join("rust_process_audio.rs");
 
-    if !destination_dir.exists() {
-        fs::create_dir_all(destination_dir)?;
-    }
+    if rust_process_file.exists() {
+        let user_code = fs::read_to_string(&rust_process_file)?;
+        let start_marker = "// Rust processing function - will be loaded from user's code\nfn rust_process";
+        let end_marker = "\n}\n\n// C++ FFI";
 
-    for entry in fs::read_dir(source_dir)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-
-        if file_type.is_file() {
-            let file_name = entry.file_name();
-            let destination_path = destination_dir.join(&file_name);
-            let destination_path_clone = destination_path.clone();
-            copy(entry.path(), destination_path)?;
-            println!("Copied {:?} to {:?}", entry.path(), destination_path_clone);
+        if let Some(start_idx) = main_rs_content.find(start_marker) {
+            if let Some(end_idx) = main_rs_content[start_idx..].find(end_marker) {
+                let actual_end = start_idx + end_idx + 2;
+                main_rs_content.replace_range(
+                    start_idx..actual_end,
+                    &format!("// Rust processing function - loaded from user's code\n{}", user_code.trim())
+                );
+                fs::write(&main_rs_path, main_rs_content)?;
+                println!("Injected user Rust code from rust_process_audio.rs");
+            }
         }
+    } else {
+        println!("No rust_process_audio.rs found, using default pass-through implementation");
     }
-
     Ok(())
 }
