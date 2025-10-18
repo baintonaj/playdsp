@@ -1,7 +1,64 @@
-<<<<<<< HEAD
-# Project exclude paths
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# Debug builds
+debug/
+*.dSYM/
+
+# Platform-specific
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# IDEs - JetBrains (RustRover, IntelliJ IDEA, CLion)
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.idea_modules/
+atlassian-ide-plugin.xml
+com_crashlytics_export_strings.xml
+crashlytics.properties
+crashlytics-build.properties
+fabric.properties
+
+# IDEs - VS Code
+.vscode/
+*.code-workspace
+
+# Build artifacts
 /dsp/src/process/target/
-/playdsp_installer
-=======
-/target
->>>>>>> 7c5a69e (Refactored the general orgianization of the program, and swicthed the main directory for recompliation to Documents in macOS, rather than /usr/local/bin.)
+/playdsp_installer/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Runtime compilation directory
+.playdsp_runtime/
+
+# Backup files
+*~
+*.swp
+*.swo
+*.tmp
+*.bak
+*.old
+
+# OS temp files
+.Spotlight-V100
+.Trashes
+._*
+.DocumentRevisions-V100
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns

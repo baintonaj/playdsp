@@ -1,6 +1,5 @@
 mod file_processing;
 
-use std::process;
 use file_processing::code_processing::create_folders_and_copy_files::*;
 use file_processing::code_processing::process_and_copy_files::*;
 use file_processing::code_processing::get_program_files::*;
@@ -10,7 +9,6 @@ use signal_processing::process_multiple_audio_files::*;
 mod constants;
 mod program_recompile;
 mod signal_processing;
-mod external_processing;
 
 use program_recompile::run_recompile::*;
 
@@ -18,9 +16,8 @@ use constants::constants::*;
 use clap::{Arg, ArgAction, Command};
 
 fn main() {
-    println!("Hello world from playdsp! PID {}", process::id());
-    let matches = Command::new("playdsp")
-        .version("0.1.4")
+    let matches = Command::new(env!("CARGO_PKG_NAME"))
+        .version(env!("CARGO_PKG_VERSION"))
         .author("Andy Bainton <baintonaj@gmail.com>")
         .about("Compiles Rust and/or C++ files in release mode, and processes multiple audio files concurrently")
         .subcommand(
@@ -101,6 +98,14 @@ fn main() {
             eprintln!("Error replacing audio files: {}", e);
             return;
         }
+    }
+
+    use std::path::Path;
+    let runtime_binary = Path::new("../audio/.playdsp_runtime/target/release/playdsp_runtime");
+
+    if !runtime_binary.exists() {
+        println!("Runtime binary not found. Compiling runtime with code from ../audio/processing/...");
+        run_recompile(&matches);
     }
 
     if !rust_present && !cpp_present {

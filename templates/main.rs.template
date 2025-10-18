@@ -1,0 +1,178 @@
+use std::env;
+use bwavfile::{WaveFmt, WaveReader, WaveWriter};
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() < 4 {
+        eprintln!("Usage: playdsp_runtime <input.wav> <output.wav> <rs|cpp>");
+        std::process::exit(1);
+    }
+
+    let input_path = &args[1];
+    let output_path = &args[2];
+    let mode = &args[3];
+
+    if let Err(e) = process_audio(input_path, output_path, mode) {
+        eprintln!("Error processing audio: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn process_audio(input_path: &str, output_path: &str, mode: &str) -> Result<(), String> {
+    let (header, samples_f64): (WaveFmt, Vec<Vec<f64>>) = read_wav(input_path)?;
+
+    const BUFFER_SIZE: usize = 1024;
+    let num_channels = samples_f64.len();
+    let total_samples = samples_f64[0].len();
+    let num_buffers = (total_samples + BUFFER_SIZE - 1) / BUFFER_SIZE;
+
+    let mut buffered_samples = vec![vec![vec![0.0; BUFFER_SIZE]; num_channels]; num_buffers];
+
+    for i in 0..total_samples {
+        let buffer_index = i / BUFFER_SIZE;
+        let sample_index = i % BUFFER_SIZE;
+        for channel in 0..num_channels {
+            buffered_samples[buffer_index][channel][sample_index] = samples_f64[channel][i];
+        }
+    }
+
+    let mut processed_samples_f64 = vec![vec![vec![0.0; BUFFER_SIZE]; num_channels]; num_buffers];
+
+    if mode == "rs" {
+        for (buffer_index, buffer) in buffered_samples.iter().enumerate() {
+            rust_process(buffer, &mut processed_samples_f64[buffer_index]);
+        }
+    } else if mode == "cpp" {
+        for (buffer_index, buffer) in buffered_samples.iter().enumerate() {
+            cpp_process_audio_wrapper(buffer, &mut processed_samples_f64[buffer_index]);
+        }
+    }
+
+    let mut processed_samples_2d_f64 = vec![vec![0.0; total_samples]; num_channels];
+    for buffer_index in 0..num_buffers {
+        for channel in 0..num_channels {
+            for sample_index in 0..BUFFER_SIZE {
+                let flat_index = buffer_index * BUFFER_SIZE + sample_index;
+                if flat_index < total_samples {
+                    processed_samples_2d_f64[channel][flat_index] = processed_samples_f64[buffer_index][channel][sample_index];
+                }
+            }
+        }
+    }
+
+    let processed_samples: Vec<Vec<f32>> = processed_samples_2d_f64.iter()
+        .map(|channel| channel.iter().map(|&sample| sample as f32).collect())
+        .collect();
+
+    if let Err(err) = write_wav(&output_path, &processed_samples, header) {
+        return Err(format!("Error writing WAV file: {}", err));
+    }
+
+    Ok(())
+}
+
+fn read_wav(input_file_name: &str) -> Result<(WaveFmt, Vec<Vec<f64>>), String> {
+    let mut r = WaveReader::open(input_file_name).map_err(|e| format!("Error opening WAV file: {}", e))?;
+    let input_format = r.format().map_err(|e| format!("Error reading format: {}", e))?;
+    let input_sample_count = r.frame_length().map_err(|e| format!("Error reading frame length: {}", e))? as usize;
+    let input_channel_count = input_format.channel_count as usize;
+    let mut frame_reader = r.audio_frame_reader().map_err(|e| format!("Error reading audio frames: {}", e))?;
+
+    let bits_per_sample = input_format.bits_per_sample;
+    let is_float = input_format.tag == bwavfile::WAVE_TAG_FLOAT;
+
+    if !is_float && bits_per_sample == 8 {
+        return Err("8-bit audio is not supported. Please use 16-bit, 24-bit, or 32-bit audio files.".to_string());
+    }
+
+    let mut buffer = input_format.create_frame_buffer::<f32>(input_sample_count * input_channel_count);
+    frame_reader.read_frames::<f32>(&mut buffer).map_err(|e| format!("Error reading frames: {}", e))?;
+
+    let mut result = vec![vec![0.0_f64; input_sample_count]; input_channel_count];
+    let mut k = 0;
+    for i in 0..input_sample_count {
+        for j in 0..input_channel_count {
+            result[j][i] = buffer[k] as f64;
+            k += 1;
+        }
+    }
+
+    Ok((input_format, result))
+}
+
+fn write_wav(output_path: &str, processed_samples: &Vec<Vec<f32>>, header: WaveFmt) -> Result<(), String> {
+    const BITS_PER_SAMPLE_FOR_F32: u16 = 32;
+    let output_format = WaveFmt {
+        tag: bwavfile::WAVE_TAG_FLOAT,
+        channel_count: header.channel_count,
+        sample_rate: header.sample_rate,
+        bytes_per_second: (header.channel_count * BITS_PER_SAMPLE_FOR_F32 / 8) as u32 * header.sample_rate,
+        block_alignment: header.channel_count * BITS_PER_SAMPLE_FOR_F32 / 8,
+        bits_per_sample: BITS_PER_SAMPLE_FOR_F32,
+        extended_format: None,
+    };
+
+    let values_vec: Vec<f32> = (0..processed_samples[0].len())
+        .flat_map(|j| processed_samples.iter().map(move |row| row[j]))
+        .collect();
+
+    let w = WaveWriter::create(output_path, output_format).unwrap();
+    let mut frame_writer = w.audio_frame_writer().unwrap();
+
+    frame_writer.write_frames::<f32>(values_vec.as_slice()).unwrap();
+    frame_writer.end().unwrap();
+
+    Ok(())
+}
+
+// Rust processing function - will be loaded from user's code
+fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
+    for (in_channel, out_channel) in input.iter().zip(output.iter_mut()) {
+        for (in_sample, out_sample) in in_channel.iter().zip(out_channel.iter_mut()) {
+            *out_sample = *in_sample;
+        }
+    }
+}
+
+// C++ FFI
+unsafe extern "C" {
+    fn cpp_process(
+        input: *const f64,
+        num_channels: usize,
+        num_samples: usize,
+        output: *mut f64,
+    );
+}
+
+pub fn cpp_process_audio_wrapper(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
+    let num_channels = input.len();
+    let num_samples = input[0].len();
+    let mut flattened_input: Vec<f64> = vec![0.0; num_channels * num_samples];
+    let mut flattened_output: Vec<f64> = vec![0.0; num_channels * num_samples];
+
+    let mut k = 0;
+    for sample in 0..num_samples {
+        for channel in 0..num_channels {
+            flattened_input[k] = input[channel][sample];
+            k += 1;
+        }
+    }
+
+    unsafe {
+        cpp_process(
+            flattened_input.as_ptr(),
+            num_channels,
+            num_samples,
+            flattened_output.as_mut_ptr(),
+        );
+    }
+
+    let mut k = 0;
+    for sample in 0..num_samples {
+        for channel in 0..num_channels {
+            output[channel][sample] = flattened_output[k];
+            k += 1;
+        }
+    }
+}

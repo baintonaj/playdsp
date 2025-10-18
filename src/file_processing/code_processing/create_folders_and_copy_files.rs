@@ -15,11 +15,12 @@ pub(crate) fn create_folders_and_copy_files(base_dir: &str) {
 
     let rust_file_content =
 r#"pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
-    let gain_raw = 10.0_f64.powf(-12.0 / 20.0);
+    let gain_db = -12.0;
+    let gain_linear = 10.0_f64.powf(gain_db / 20.0);
 
     for (in_channel, out_channel) in input.iter().zip(output.iter_mut()) {
         for (in_sample, out_sample) in in_channel.iter().zip(out_channel.iter_mut()) {
-            *out_sample = in_sample * gain_raw;
+            *out_sample = in_sample * gain_linear;
         }
     }
 }"#;
@@ -30,32 +31,31 @@ r#"#include <cstddef>
 #include <vector>
 
 extern "C" void cpp_process(const double* input, size_t num_channels, size_t num_samples, double* output) {
-    std::vector<std::vector<double>/* */> input_vector(num_channels, std::vector<double>(num_samples, 0.0));
-    std::vector<std::vector<double>/* */> output_vector(num_channels, std::vector<double>(num_samples, 0.0));
+    std::vector<std::vector<double>> input_vector(num_channels, std::vector<double>(num_samples, 0.0));
+    std::vector<std::vector<double>> output_vector(num_channels, std::vector<double>(num_samples, 0.0));
 
-    // Expand to 2D
-    std::size_t k_in = 0;
-    for (std::size_t i = 0; i < num_channels; i++) {
-        for (std::size_t j = 0; j < num_samples; j++) {
-            input_vector[i][j] = input[k_in];
-            k_in++;
+    std::size_t k = 0;
+    for (std::size_t sample = 0; sample < num_samples; sample++) {
+        for (std::size_t channel = 0; channel < num_channels; channel++) {
+            input_vector[channel][sample] = input[k];
+            k++;
         }
     }
 
-    // Core Processing
-    double gain_raw = std::pow(10.0, -12.0 / 20.0);
-    for (std::size_t i = 0; i < num_channels; i++) {
-        for (std::size_t j = 0; j < num_samples; j++) {
-            output_vector[i][j] = input_vector[i][j] * gain_raw;
+    double gain_db = -12.0;
+    double gain_linear = std::pow(10.0, gain_db / 20.0);
+
+    for (std::size_t channel = 0; channel < num_channels; channel++) {
+        for (std::size_t sample = 0; sample < num_samples; sample++) {
+            output_vector[channel][sample] = input_vector[channel][sample] * gain_linear;
         }
     }
 
-    // Flatten to 1D
-    std::size_t k_out = 0;
-    for (std::size_t i = 0; i < num_channels; i++) {
-        for (std::size_t j = 0; j < num_samples; j++) {
-            output[k_out] = output_vector[i][j];
-            k_out++;
+    k = 0;
+    for (std::size_t sample = 0; sample < num_samples; sample++) {
+        for (std::size_t channel = 0; channel < num_channels; channel++) {
+            output[k] = output_vector[channel][sample];
+            k++;
         }
     }
 }"#;
@@ -63,7 +63,6 @@ extern "C" void cpp_process(const double* input, size_t num_channels, size_t num
     let rust_file_path = processing_dir.join("rust_process_audio.rs");
     let cpp_file_path = processing_dir.join("cpp_process_audio.cpp");
 
-    // Write Rust and C++ processing files in the "processing" folder
     write(&rust_file_path, rust_file_content).expect("Failed to write Rust file");
     write(&cpp_file_path, cpp_file_content).expect("Failed to write C++ file");
 
