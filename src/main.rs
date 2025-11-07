@@ -103,8 +103,28 @@ fn main() {
     use std::path::Path;
     let runtime_binary = Path::new("../audio/.playdsp_runtime/target/release/playdsp_runtime");
 
-    if !runtime_binary.exists() {
-        println!("Runtime binary not found. Compiling runtime with code from ../audio/processing/...");
+    // Check if any DSP code files exist in the processing directory
+    let processing_dir = Path::new(&*PROGRAM_FOLDER);
+    let has_rust_files = processing_dir.join("rust_process_audio.rs").exists();
+    let has_dependencies_toml = processing_dir.join("dependencies.toml").exists();
+    let has_cpp_files = processing_dir.exists() &&
+        std::fs::read_dir(processing_dir)
+            .ok()
+            .and_then(|entries| {
+                entries.filter_map(Result::ok).find(|entry| {
+                    let path = entry.path();
+                    let ext = path.extension().and_then(|s| s.to_str());
+                    ext == Some("cpp") || ext == Some("h") || ext == Some("hpp")
+                })
+            })
+            .is_some();
+
+    // Always recompile if DSP code files exist to pick up any changes
+    if has_rust_files || has_cpp_files || has_dependencies_toml {
+        println!("DSP code detected in ../audio/processing/ - recompiling runtime to ensure latest changes...");
+        run_recompile(&matches);
+    } else if !runtime_binary.exists() {
+        println!("Runtime binary not found. Compiling runtime with default code...");
         run_recompile(&matches);
     }
 
