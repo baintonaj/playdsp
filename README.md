@@ -8,6 +8,7 @@ High-performance tool that compiles and executes Rust and/or C++ DSP code agains
 
 - **Dual-language support**: Write DSP code in Rust or C++ (or both)
 - **On-the-fly compilation**: Automatically compiles your code locally on each run
+- **Automatic dependency management**: Rust external crates are auto-detected and compiled
 - **Multi-file C++ projects**: Full support for C++20 with headers and multiple source files
 - **Parallel processing**: Processes multiple audio files concurrently using Rayon
 - **Portable**: No installation of source files required - main binary is self-contained
@@ -106,6 +107,28 @@ extern "C" void cpp_process(const double* input, size_t num_channels,
     MyDSP::process(input, num_channels, num_samples, output);
 }
 ```
+
+**For Rust Projects with External Crates**: playdsp automatically detects and includes external dependencies!
+
+Two options:
+1. **Auto-detection** (easiest): Just use the crate in your code
+```rust
+use rand::Rng;  // playdsp will auto-detect and add rand = "*" to Cargo.toml
+
+pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
+    let mut rng = rand::thread_rng();
+    // Your DSP code...
+}
+```
+
+2. **Explicit versions** (recommended): Create `audio/processing/dependencies.toml`
+```toml
+[dependencies]
+rand = "0.8"
+rustfft = { version = "6.0", features = ["avx"] }
+```
+
+See [DEPENDENCIES.md](DEPENDENCIES.md) for full documentation on dependency management.
 
 ### 3. Add Audio Files
 

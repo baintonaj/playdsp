@@ -1,0 +1,15 @@
+[dependencies]
+# Example dependencies.toml for playdsp
+# Place this file in: ../audio/processing/dependencies.toml
+
+# Simple version specification
+rand = "0.8"
+
+# With features enabled
+rustfft = { version = "6.0", features = ["avx"] }
+
+# Specific version
+num-complex = "0.4.6"
+
+# Any other crate from crates.io
+# The format follows standard Cargo.toml dependency syntax
