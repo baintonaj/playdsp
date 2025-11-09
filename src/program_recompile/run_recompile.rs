@@ -1,6 +1,6 @@
 use crate::constants::constants::*;
 use clap::ArgMatches;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::exit;
 use std::process::Command;
@@ -160,23 +160,75 @@ fn parse_user_dependencies(processing_dir: &Path) -> io::Result<HashMap<String, 
     }
 
     if rust_dir.exists() {
-        scan_rust_dependencies_recursive(&rust_dir, &mut dependencies);
+        let local_modules = collect_local_modules(&rust_dir);
+        if !local_modules.is_empty() {
+            println!("Detected {} local modules (will be excluded from dependencies): {:?}",
+                     local_modules.len(), local_modules);
+        }
+
+        scan_rust_dependencies_recursive(&rust_dir, &mut dependencies, &local_modules);
     }
 
     Ok(dependencies)
 }
 
-fn scan_rust_dependencies_recursive(dir: &Path, dependencies: &mut HashMap<String, String>) {
+fn collect_local_modules(dir: &Path) -> HashSet<String> {
+    let mut modules = HashSet::new();
+
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries {
             if let Ok(entry) = entry {
                 let path = entry.path();
 
                 if path.is_dir() {
-                    scan_rust_dependencies_recursive(&path, dependencies);
+                    modules.extend(collect_local_modules(&path));
                 } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                     if let Ok(content) = fs::read_to_string(&path) {
-                        let detected = detect_crate_dependencies(&content);
+                        for line in content.lines() {
+                            let line = line.trim();
+
+                            if line.starts_with("mod ") || line.starts_with("pub mod ") {
+                                let mod_keyword = if line.starts_with("pub mod ") {
+                                    "pub mod "
+                                } else {
+                                    "mod "
+                                };
+
+                                if let Some(rest) = line.strip_prefix(mod_keyword) {
+                                    let module_name = rest
+                                        .trim_end_matches(';')
+                                        .trim()
+                                        .split_whitespace()
+                                        .next()
+                                        .unwrap_or("")
+                                        .to_string();
+
+                                    if !module_name.is_empty() {
+                                        modules.insert(module_name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    modules
+}
+
+fn scan_rust_dependencies_recursive(dir: &Path, dependencies: &mut HashMap<String, String>, local_modules: &HashSet<String>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+
+                if path.is_dir() {
+                    scan_rust_dependencies_recursive(&path, dependencies, local_modules);
+                } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        let detected = detect_crate_dependencies(&content, local_modules);
                         for crate_name in detected {
                             if !dependencies.contains_key(&crate_name) {
                                 dependencies.insert(crate_name.clone(), "\"*\"".to_string());
@@ -190,7 +242,7 @@ fn scan_rust_dependencies_recursive(dir: &Path, dependencies: &mut HashMap<Strin
     }
 }
 
-fn detect_crate_dependencies(code: &str) -> Vec<String> {
+fn detect_crate_dependencies(code: &str, local_modules: &HashSet<String>) -> Vec<String> {
     let mut crates = Vec::new();
     let std_crates = ["std", "core", "alloc"];
 
@@ -206,7 +258,9 @@ fn detect_crate_dependencies(code: &str) -> Vec<String> {
                     .trim()
                     .trim_end_matches(';');
 
-                if !crate_name.is_empty() && !std_crates.contains(&crate_name) {
+                if !crate_name.is_empty()
+                    && !std_crates.contains(&crate_name)
+                    && !local_modules.contains(crate_name) {
                     if !crates.contains(&crate_name.to_string()) {
                         crates.push(crate_name.to_string());
                     }
