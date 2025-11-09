@@ -85,6 +85,31 @@ fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
         println!("Copied user Rust code from rust/ folder to runtime");
 
         if rust_process_file.exists() {
+            // Create a mod.rs file in user_code directory to make it a proper module
+            // Dynamically detect all .rs files and create module declarations
+            let mut mod_declarations = Vec::new();
+
+            if let Ok(entries) = fs::read_dir(&runtime_user_code_dir) {
+                for entry in entries {
+                    if let Ok(entry) = entry {
+                        let path = entry.path();
+                        if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                            if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                if file_stem != "mod" {
+                                    mod_declarations.push(format!("pub mod {};", file_stem));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            mod_declarations.sort(); // Ensure consistent ordering
+            let mut mod_rs_content = mod_declarations.join("\n");
+            mod_rs_content.push_str("\n\npub use rust_process_audio::rust_process;\n");
+
+            fs::write(runtime_user_code_dir.join("mod.rs"), mod_rs_content)?;
+
             let start_marker = "// Rust processing function - will be loaded from user's code\nfn rust_process";
             let end_marker = "\n}\n\n// C++ FFI";
 
@@ -93,12 +118,7 @@ fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
                     let actual_end = start_idx + end_idx + 2;
                     main_rs_content.replace_range(
                         start_idx..actual_end,
-                        "// Rust processing function - loaded from user's code module\nmod user_code;\nuse user_code::rust_process_audio::rust_process;\n\nfn rust_process_wrapper(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {\n    rust_process(input, output);\n}"
-                    );
-
-                    main_rs_content = main_rs_content.replace(
-                        "rust_process(buffer, &mut processed_samples_f64[buffer_index]);",
-                        "rust_process_wrapper(buffer, &mut processed_samples_f64[buffer_index]);"
+                        "// Rust processing function - loaded from user's code module\nmod user_code;\n\nfn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {\n    user_code::rust_process(input, output);\n}"
                     );
 
                     fs::write(&main_rs_path, main_rs_content)?;
