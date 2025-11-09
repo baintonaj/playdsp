@@ -15,6 +15,25 @@ use program_recompile::run_recompile::*;
 use constants::constants::*;
 use clap::{Arg, ArgAction, Command};
 
+fn check_cpp_files_recursive(dir: &std::path::Path) -> bool {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                if check_cpp_files_recursive(&path) {
+                    return true;
+                }
+            } else {
+                let ext = path.extension().and_then(|s| s.to_str());
+                if ext == Some("cpp") || ext == Some("h") || ext == Some("hpp") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn main() {
     let matches = Command::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
@@ -103,25 +122,16 @@ fn main() {
     use std::path::Path;
     let runtime_binary = Path::new("../audio/.playdsp_runtime/target/release/playdsp_runtime");
 
-    // Check if any DSP code files exist in the processing directory
-    let processing_dir = Path::new(&*PROGRAM_FOLDER);
-    let has_rust_files = processing_dir.join("rust_process_audio.rs").exists();
-    let has_dependencies_toml = processing_dir.join("dependencies.toml").exists();
-    let has_cpp_files = processing_dir.exists() &&
-        std::fs::read_dir(processing_dir)
-            .ok()
-            .and_then(|entries| {
-                entries.filter_map(Result::ok).find(|entry| {
-                    let path = entry.path();
-                    let ext = path.extension().and_then(|s| s.to_str());
-                    ext == Some("cpp") || ext == Some("h") || ext == Some("hpp")
-                })
-            })
-            .is_some();
+    let rust_dir = Path::new(&*RUST_FOLDER);
+    let cpp_dir = Path::new(&*CPP_FOLDER);
 
-    // Always recompile if DSP code files exist to pick up any changes
+    let has_rust_files = rust_dir.exists() && rust_dir.join("rust_process_audio.rs").exists();
+    let has_dependencies_toml = rust_dir.exists() && rust_dir.join("dependencies.toml").exists();
+    let has_cpp_files = cpp_dir.exists() &&
+        check_cpp_files_recursive(&cpp_dir);
+
     if has_rust_files || has_cpp_files || has_dependencies_toml {
-        println!("DSP code detected in ../audio/processing/ - recompiling runtime to ensure latest changes...");
+        println!("DSP code detected - recompiling runtime to ensure latest changes...");
         run_recompile(&matches);
     } else if !runtime_binary.exists() {
         println!("Runtime binary not found. Compiling runtime with default code...");
@@ -142,12 +152,12 @@ fn main() {
     let mut cpp_files: Vec<String> = vec![];
 
     if !rust_present && !cpp_present {
-        rust_files = get_program_files(&*PROGRAM_FOLDER, "rs");
-        cpp_files = get_program_files(&*PROGRAM_FOLDER, "cpp");
+        rust_files = get_program_files(&*RUST_FOLDER, "rs");
+        cpp_files = get_program_files(&*CPP_FOLDER, "cpp");
     } else if rust_present {
-        rust_files = get_program_files(&*PROGRAM_FOLDER, "rs");
+        rust_files = get_program_files(&*RUST_FOLDER, "rs");
     } else if cpp_present {
-        cpp_files = get_program_files(&*PROGRAM_FOLDER, "cpp");
+        cpp_files = get_program_files(&*CPP_FOLDER, "cpp");
     }
 
     if !rust_present && !cpp_present {

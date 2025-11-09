@@ -24,7 +24,6 @@ pub(crate) fn run_recompile(_matches: &ArgMatches) {
 
     println!("Runtime project setup complete.");
 
-    // Check if user has Rust code to include
     if let Err(e) = inject_user_rust_code(&runtime_dir, processing_dir) {
         eprintln!("Failed to inject user Rust code: {}", e);
         exit(1);
@@ -51,7 +50,6 @@ fn setup_runtime_project(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
     fs::create_dir_all(runtime_dir)?;
     fs::create_dir_all(runtime_dir.join("src"))?;
 
-    // Parse user dependencies and generate Cargo.toml with them
     let dependencies = parse_user_dependencies(processing_dir)?;
     let cargo_toml = generate_cargo_toml_with_dependencies(&dependencies);
     fs::write(runtime_dir.join("Cargo.toml"), cargo_toml)?;
@@ -73,39 +71,71 @@ fn setup_runtime_project(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
 fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Result<()> {
     let main_rs_path = runtime_dir.join("src/main.rs");
     let mut main_rs_content = fs::read_to_string(&main_rs_path)?;
-    let rust_process_file = processing_dir.join("rust_process_audio.rs");
+    let rust_dir = processing_dir.join("rust");
+    let rust_process_file = rust_dir.join("rust_process_audio.rs");
 
-    if rust_process_file.exists() {
-        let user_code = fs::read_to_string(&rust_process_file)?;
-        let start_marker = "// Rust processing function - will be loaded from user's code\nfn rust_process";
-        let end_marker = "\n}\n\n// C++ FFI";
+    let runtime_user_code_dir = runtime_dir.join("src/user_code");
+    if rust_dir.exists() {
+        if runtime_user_code_dir.exists() {
+            fs::remove_dir_all(&runtime_user_code_dir)?;
+        }
 
-        if let Some(start_idx) = main_rs_content.find(start_marker) {
-            if let Some(end_idx) = main_rs_content[start_idx..].find(end_marker) {
-                let actual_end = start_idx + end_idx + 2;
-                main_rs_content.replace_range(
-                    start_idx..actual_end,
-                    &format!("// Rust processing function - loaded from user's code\n{}", user_code.trim())
-                );
-                fs::write(&main_rs_path, main_rs_content)?;
-                println!("Injected user Rust code from rust_process_audio.rs");
+        copy_dir_recursive(&rust_dir, &runtime_user_code_dir)?;
+
+        println!("Copied user Rust code from rust/ folder to runtime");
+
+        if rust_process_file.exists() {
+            let start_marker = "// Rust processing function - will be loaded from user's code\nfn rust_process";
+            let end_marker = "\n}\n\n// C++ FFI";
+
+            if let Some(start_idx) = main_rs_content.find(start_marker) {
+                if let Some(end_idx) = main_rs_content[start_idx..].find(end_marker) {
+                    let actual_end = start_idx + end_idx + 2;
+                    main_rs_content.replace_range(
+                        start_idx..actual_end,
+                        "// Rust processing function - loaded from user's code module\nmod user_code;\nuse user_code::rust_process_audio::rust_process;\n\nfn rust_process_wrapper(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {\n    rust_process(input, output);\n}"
+                    );
+
+                    main_rs_content = main_rs_content.replace(
+                        "rust_process(buffer, &mut processed_samples_f64[buffer_index]);",
+                        "rust_process_wrapper(buffer, &mut processed_samples_f64[buffer_index]);"
+                    );
+
+                    fs::write(&main_rs_path, main_rs_content)?;
+                }
             }
         }
     } else {
-        println!("No rust_process_audio.rs found, using default pass-through implementation");
+        println!("No rust/ folder found, using default pass-through implementation");
     }
     Ok(())
 }
 
-/// Parse user dependencies from both rust_process_audio.rs and optional dependencies.toml
+fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
+    fs::create_dir_all(dst)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let dest_path = dst.join(entry.file_name());
+
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dest_path)?;
+        } else {
+            fs::copy(&path, &dest_path)?;
+        }
+    }
+
+    Ok(())
+}
+
 fn parse_user_dependencies(processing_dir: &Path) -> io::Result<HashMap<String, String>> {
     let mut dependencies = HashMap::new();
 
-    // First, check for explicit dependencies.toml file
-    let deps_file = processing_dir.join("dependencies.toml");
+    let rust_dir = processing_dir.join("rust");
+    let deps_file = rust_dir.join("dependencies.toml");
     if deps_file.exists() {
         if let Ok(content) = fs::read_to_string(&deps_file) {
-            // Simple TOML parsing for [dependencies] section
             let mut in_dependencies_section = false;
             for line in content.lines() {
                 let line = line.trim();
@@ -118,7 +148,6 @@ fn parse_user_dependencies(processing_dir: &Path) -> io::Result<HashMap<String, 
                     continue;
                 }
                 if in_dependencies_section && !line.is_empty() && !line.starts_with('#') {
-                    // Parse lines like: crate_name = "version" or crate_name = { version = "1.0", features = ["foo"] }
                     if let Some(eq_idx) = line.find('=') {
                         let name = line[..eq_idx].trim().to_string();
                         let value = line[eq_idx + 1..].trim().to_string();
@@ -130,26 +159,37 @@ fn parse_user_dependencies(processing_dir: &Path) -> io::Result<HashMap<String, 
         }
     }
 
-    // Second, scan rust_process_audio.rs for external crate usage
-    let rust_file = processing_dir.join("rust_process_audio.rs");
-    if rust_file.exists() {
-        if let Ok(content) = fs::read_to_string(&rust_file) {
-            let detected = detect_crate_dependencies(&content);
-            for crate_name in detected {
-                // Only add if not already specified in dependencies.toml
-                if !dependencies.contains_key(&crate_name) {
-                    // Use wildcard version for auto-detected crates
-                    dependencies.insert(crate_name.clone(), "\"*\"".to_string());
-                    println!("Auto-detected dependency: {} (using latest version)", crate_name);
-                }
-            }
-        }
+    if rust_dir.exists() {
+        scan_rust_dependencies_recursive(&rust_dir, &mut dependencies);
     }
 
     Ok(dependencies)
 }
 
-/// Detect external crate dependencies from use statements
+fn scan_rust_dependencies_recursive(dir: &Path, dependencies: &mut HashMap<String, String>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+
+                if path.is_dir() {
+                    scan_rust_dependencies_recursive(&path, dependencies);
+                } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        let detected = detect_crate_dependencies(&content);
+                        for crate_name in detected {
+                            if !dependencies.contains_key(&crate_name) {
+                                dependencies.insert(crate_name.clone(), "\"*\"".to_string());
+                                println!("Auto-detected dependency: {} (using latest version)", crate_name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn detect_crate_dependencies(code: &str) -> Vec<String> {
     let mut crates = Vec::new();
     let std_crates = ["std", "core", "alloc"];
@@ -157,10 +197,8 @@ fn detect_crate_dependencies(code: &str) -> Vec<String> {
     for line in code.lines() {
         let line = line.trim();
 
-        // Match patterns like: use crate_name::...
         if line.starts_with("use ") && !line.starts_with("use crate::") && !line.starts_with("use self::") && !line.starts_with("use super::") {
             if let Some(use_content) = line.strip_prefix("use ") {
-                // Extract the root crate name (first segment before ::)
                 let crate_name = use_content
                     .split("::")
                     .next()
@@ -168,7 +206,6 @@ fn detect_crate_dependencies(code: &str) -> Vec<String> {
                     .trim()
                     .trim_end_matches(';');
 
-                // Skip standard library crates
                 if !crate_name.is_empty() && !std_crates.contains(&crate_name) {
                     if !crates.contains(&crate_name.to_string()) {
                         crates.push(crate_name.to_string());
@@ -181,26 +218,20 @@ fn detect_crate_dependencies(code: &str) -> Vec<String> {
     crates
 }
 
-/// Generate Cargo.toml content with user dependencies injected
 fn generate_cargo_toml_with_dependencies(dependencies: &HashMap<String, String>) -> String {
     let mut cargo_toml = CARGO_TOML_TEMPLATE.to_string();
 
-    // If there are user dependencies, add them to the [dependencies] section
     if !dependencies.is_empty() {
-        // Find the [dependencies] section and insert after it
         if let Some(deps_idx) = cargo_toml.find("[dependencies]") {
-            // Find the end of the line after [dependencies]
             let after_deps_header = deps_idx + "[dependencies]".len();
             if let Some(newline_idx) = cargo_toml[after_deps_header..].find('\n') {
                 let insert_pos = after_deps_header + newline_idx + 1;
 
-                // Build the dependency string
                 let mut dep_string = String::new();
                 for (name, version) in dependencies {
                     dep_string.push_str(&format!("{} = {}\n", name, version));
                 }
 
-                // Insert after the existing dependencies
                 cargo_toml.insert_str(insert_pos, &dep_string);
             }
         }

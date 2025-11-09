@@ -5,5 +5,7 @@ pub(crate) const CODE_FILE_PATH_NAME: &str = "code_file_path";
 pub(crate) const AUDIO_FILE_PATH_NAME : &str = "audio_file_path";
 pub(crate) const AUDIO_NAME : &str = "audio";
 pub(crate) const PROGRAM_FOLDER: &str = "../audio/processing";
+pub(crate) const RUST_FOLDER: &str = "../audio/processing/rust";
+pub(crate) const CPP_FOLDER: &str = "../audio/processing/cpp";
 pub(crate) const SOURCE_FOLDER: &str = "../audio/source";
 pub(crate) const RESULT_FOLDER: &str = "../audio/result";

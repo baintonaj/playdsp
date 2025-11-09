@@ -1,15 +1,15 @@
 # Managing Rust Dependencies in PlayDSP
 
-PlayDSP now automatically handles external crate dependencies in your Rust DSP code. The system supports both automatic detection and explicit version control.
+PlayDSP automatically handles external crate dependencies in your Rust DSP code. The system recursively scans all `.rs` files in your `rust/` folder and supports both automatic detection and explicit version control.
 
 ## Automatic Dependency Detection
 
-When you use external crates in your `rust_process_audio.rs` file, PlayDSP will automatically detect them from your `use` statements and add them to the runtime's Cargo.toml.
+When you use external crates in any `.rs` file in your `rust/` folder, PlayDSP will automatically detect them from your `use` statements and add them to the runtime's Cargo.toml.
 
 **Example:**
 
 ```rust
-// In ../audio/processing/rust_process_audio.rs
+// In ../audio/processing/rust/rust_process_audio.rs
 use rand::Rng;
 use num_complex::Complex;
 
@@ -18,16 +18,27 @@ pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
 }
 ```
 
+Or in any other module file:
+```rust
+// In ../audio/processing/rust/filters/biquad.rs
+use ndarray::Array1;
+
+pub struct Biquad {
+    // ...
+}
+```
+
 When you run `playdsp`, it will automatically:
-1. Detect `rand` and `num_complex` from the use statements
-2. Add them to the runtime Cargo.toml with the latest version (`"*"`)
-3. Compile the runtime with these dependencies
+1. Recursively scan all `.rs` files in the `rust/` folder
+2. Detect `rand`, `num_complex`, and `ndarray` from the use statements
+3. Add them to the runtime Cargo.toml with the latest version (`"*"`)
+4. Compile the runtime with these dependencies
 
 ## Explicit Version Control (Recommended)
 
-For production code or when you need specific versions, create a `dependencies.toml` file in your processing folder:
+For production code or when you need specific versions, create a `dependencies.toml` file in your `rust/` folder:
 
-**File:** `../audio/processing/dependencies.toml`
+**File:** `../audio/processing/rust/dependencies.toml`
 
 ```toml
 [dependencies]
@@ -53,8 +64,15 @@ This approach gives you:
 ```
 audio/
 ├── processing/
-│   ├── rust_process_audio.rs
-│   └── dependencies.toml  (optional)
+│   ├── rust/
+│   │   ├── rust_process_audio.rs
+│   │   ├── my_dsp.rs
+│   │   ├── filters/
+│   │   │   ├── mod.rs
+│   │   │   └── biquad.rs
+│   │   └── dependencies.toml  (optional)
+│   └── cpp/
+│       └── cpp_process_audio.cpp
 ├── source/
 └── result/
 ```
@@ -102,7 +120,9 @@ Compiling runtime binary...
 
 ## Notes
 
-- Dependencies are resolved fresh on every run when `--code` flag is used or code exists in `../audio/processing/`
+- Dependencies are resolved fresh on every run when code exists in `../audio/processing/rust/`
+- The system recursively scans all `.rs` files in all subdirectories for dependency detection
 - The system automatically excludes standard library crates (std, core, alloc)
 - Dependencies are added to the runtime's Cargo.toml, not your main PlayDSP binary
-- If compilation fails due to incompatible versions, update your `dependencies.toml` with compatible versions
+- If compilation fails due to incompatible versions, update your `rust/dependencies.toml` with compatible versions
+- Place `dependencies.toml` directly in the `rust/` folder, not in subdirectories

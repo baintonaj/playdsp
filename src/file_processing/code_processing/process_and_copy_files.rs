@@ -77,7 +77,20 @@ fn check_rust_function_signature(file_path: &str) -> io::Result<bool> {
 
 fn copy_to_processing_folder(file_path: &str) -> io::Result<()> {
     let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
-    let destination = format!("{}/{}", PROGRAM_FOLDER, file_name);
+
+    let destination = if file_name == "rust_process_audio.rs" {
+        format!("{}/{}", RUST_FOLDER, file_name)
+    } else if file_name == "cpp_process_audio.cpp" {
+        format!("{}/{}", CPP_FOLDER, file_name)
+    } else {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Unknown file type"));
+    };
+
+    if file_name == "rust_process_audio.rs" {
+        fs::create_dir_all(RUST_FOLDER)?;
+    } else {
+        fs::create_dir_all(CPP_FOLDER)?;
+    }
 
     copy(file_path, &destination)?;
     println!("File copied to: {}", destination);

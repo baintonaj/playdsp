@@ -8,8 +8,10 @@ High-performance tool that compiles and executes Rust and/or C++ DSP code agains
 
 - **Dual-language support**: Write DSP code in Rust or C++ (or both)
 - **On-the-fly compilation**: Automatically compiles your code locally on each run
-- **Automatic dependency management**: Rust external crates are auto-detected and compiled
-- **Multi-file C++ projects**: Full support for C++20 with headers and multiple source files
+- **Native folder structures**: Drop in entire Rust/C++ libraries with their native project structure
+- **Automatic dependency management**: Rust external crates are auto-detected from all files recursively
+- **Multi-file projects**: Full support for complex Rust modules and C++20 with nested subdirectories
+- **Persistent state objects**: Create classes/structs that maintain state across buffer calls
 - **Parallel processing**: Processes multiple audio files concurrently using Rayon
 - **Portable**: No installation of source files required - main binary is self-contained
 - **Format support**: 16-bit, 24-bit, 32-bit integer PCM and 32-bit float WAV files
@@ -36,14 +38,18 @@ playdsp new
 This creates:
 ```
 audio/
-├── source/            # Input WAV files
-├── processing/        # DSP code (rust_process_audio.rs, cpp_process_audio.cpp)
-└── result/            # Processed audio output
+├── source/                        # Input WAV files
+├── processing/                    # DSP code root
+│   ├── rust/                      # Rust DSP code (with subdirectories)
+│   │   └── rust_process_audio.rs  # Rust entry point
+│   └── cpp/                       # C++ DSP code (with subdirectories)
+│       └── cpp_process_audio.cpp  # C++ entry point
+└── result/                        # Processed audio output
 ```
 
 ### 2. Write Your DSP Code
 
-**For Rust** - Edit `audio/processing/rust_process_audio.rs`:
+**For Rust** - Edit `audio/processing/rust/rust_process_audio.rs`:
 ```rust
 pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
     let gain_db = -12.0;
@@ -57,7 +63,7 @@ pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
 }
 ```
 
-**For C++** - Edit `audio/processing/cpp_process_audio.cpp`:
+**For C++** - Edit `audio/processing/cpp/cpp_process_audio.cpp`:
 ```cpp
 #include <cstddef>
 #include <cmath>
@@ -97,10 +103,21 @@ extern "C" void cpp_process(const double* input, size_t num_channels,
 }
 ```
 
-**For Multi-file C++ Projects**: Place all `.cpp`, `.h`, and `.hpp` files in `audio/processing/`:
+**For Multi-file C++ Projects**: Place all `.cpp`, `.h`, and `.hpp` files in `audio/processing/cpp/` with any folder structure:
+```
+audio/processing/cpp/
+├── cpp_process_audio.cpp  # Entry point
+├── my_dsp_library.h
+├── my_dsp_library.cpp
+└── filters/
+    ├── biquad.h
+    └── biquad.cpp
+```
+
 ```cpp
+// In cpp_process_audio.cpp
 #include "my_dsp_library.h"
-#include "filters.h"
+#include "filters/biquad.h"
 
 extern "C" void cpp_process(const double* input, size_t num_channels,
                             size_t num_samples, double* output) {
@@ -108,7 +125,35 @@ extern "C" void cpp_process(const double* input, size_t num_channels,
 }
 ```
 
-**For Rust Projects with External Crates**: playdsp automatically detects and includes external dependencies!
+All `.cpp` files in all subdirectories are automatically compiled and linked.
+
+**For Multi-file Rust Projects**: Place all `.rs` files in `audio/processing/rust/` with native Rust module structure:
+```
+audio/processing/rust/
+├── rust_process_audio.rs  # Entry point
+├── my_dsp.rs              # Your module
+└── filters/
+    ├── mod.rs
+    └── biquad.rs
+```
+
+```rust
+// In rust_process_audio.rs
+mod my_dsp;
+mod filters;
+
+use my_dsp::MyProcessor;
+use filters::biquad::Biquad;
+
+pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
+    // Use your modules
+    MyProcessor::process(input, output);
+}
+```
+
+The entire `rust/` folder is copied to the runtime as a module.
+
+**For Rust Projects with External Crates**: playdsp automatically detects and includes external dependencies from all `.rs` files!
 
 Two options:
 1. **Auto-detection** (easiest): Just use the crate in your code
@@ -121,7 +166,7 @@ pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
 }
 ```
 
-2. **Explicit versions** (recommended): Create `audio/processing/dependencies.toml`
+2. **Explicit versions** (recommended): Create `audio/processing/rust/dependencies.toml`
 ```toml
 [dependencies]
 rand = "0.8"
@@ -160,7 +205,7 @@ playdsp [OPTIONS] [SUBCOMMAND]
 
 - `-r`, `--rust`      Process with Rust code only
 - `-c`, `--cpp`       Process with C++ code only
-- `-d`, `--code <DIR>` Use code from specified directory (copies to `audio/processing/`)
+- `-d`, `--code <DIR>` Use code from specified directory (copies to `audio/processing/rust/` or `audio/processing/cpp/`)
 - `-a`, `--audio <DIR>` Use audio from specified directory (copies to `audio/source/`)
 - `-h`, `--help`      Print help
 - `-V`, `--version`   Print version
@@ -192,11 +237,13 @@ playdsp --code ../my-dsp-code --audio ../my-audio-files
 ## How It Works
 
 1. **Setup**: When you run playdsp, it automatically checks for a compiled runtime binary
-2. **Auto-Compilation** (if runtime doesn't exist):
+2. **Auto-Compilation** (if runtime doesn't exist or code changes detected):
    - Creates local runtime project at `../audio/.playdsp_runtime/`
    - Generates runtime binary from embedded templates
-   - Injects your Rust code from `rust_process_audio.rs` (if present)
-   - Compiles all C++ files from `processing/` with C++20 (if present)
+   - Copies entire `rust/` folder to runtime's `src/user_code/` module (if present)
+   - Recursively scans all `.rs` files for external crate dependencies
+   - Recursively compiles all `.cpp` files from `cpp/` folder with C++20 (if present)
+   - Supports nested subdirectories for both languages
 3. **Audio Processing**:
    - All input formats (16/24/32-bit PCM, 32/64-bit float) converted to f64
    - Runtime binary processes each audio file in 1024-sample buffers
@@ -204,7 +251,8 @@ playdsp --code ../my-dsp-code --audio ../my-audio-files
 4. **Output**: Processed files saved as `{filename}_processed_{timestamp}_{rs|cpp}.wav` (32-bit float)
 
 **Recompiling After Code Changes:**
-- Delete `../audio/.playdsp_runtime/` to force recompilation
+- Runtime automatically recompiles when it detects code in `rust/` or `cpp/` folders
+- Or delete `../audio/.playdsp_runtime/` to force full recompilation
 - Or use `--code ./processing` to explicitly trigger recompilation
 
 ## DSP Function Requirements

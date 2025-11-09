@@ -3,16 +3,38 @@ use std::fs;
 use cc;
 
 fn main() {
-    let processing_dir = Path::new("../processing");
+    let cpp_dir = Path::new("../processing/cpp");
     println!("cargo:rerun-if-changed=build.rs");
     let mut cpp_files = Vec::new();
 
-    if processing_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&processing_dir) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
+    if cpp_dir.exists() {
+        scan_cpp_files_recursive(&cpp_dir, &mut cpp_files);
+    }
 
+    if !cpp_files.is_empty() {
+        let mut build = cc::Build::new();
+        build.cpp(true);
+        build.flag_if_supported("-O3");
+        build.flag_if_supported("-std=c++20");
+        build.include(&cpp_dir);
+
+        for cpp_file in cpp_files {
+            build.file(cpp_file);
+        }
+
+        build.compile("cpp_process_audio");
+    }
+}
+
+fn scan_cpp_files_recursive(dir: &Path, cpp_files: &mut Vec<std::path::PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+
+                if path.is_dir() {
+                    scan_cpp_files_recursive(&path, cpp_files);
+                } else {
                     if path.extension().and_then(|s| s.to_str()) == Some("cpp") {
                         println!("cargo:rerun-if-changed={}", path.display());
                         cpp_files.push(path.clone());
@@ -26,19 +48,5 @@ fn main() {
                 }
             }
         }
-    }
-
-    if !cpp_files.is_empty() {
-        let mut build = cc::Build::new();
-        build.cpp(true);
-        build.flag_if_supported("-O3");
-        build.flag_if_supported("-std=c++20");
-        build.include(&processing_dir);
-
-        for cpp_file in cpp_files {
-            build.file(cpp_file);
-        }
-
-        build.compile("cpp_process_audio");
     }
 }

@@ -103,9 +103,13 @@ playdsp new
 
 ls audio/
 ls audio/processing/
+ls audio/processing/rust/
+ls audio/processing/cpp/
 
 playdsp --help
 ```
+
+You should see the folder structure with `rust/` and `cpp/` subdirectories containing the entry point files.
 
 ## Troubleshooting
 

@@ -25,7 +25,6 @@ pub(crate) fn process_multiple_audio_files(audio_files: &Vec<String>, program_pa
             if Path::new(&program_path).exists() {
                 let output_file = format!("{}/{}_processed_{}_{}.wav", RESULT_FOLDER, audio_stem, current_time, program_suffix);
 
-                // Call the runtime binary to process the audio
                 let status = Command::new(&runtime_binary)
                     .arg(audio_file)
                     .arg(&output_file)
