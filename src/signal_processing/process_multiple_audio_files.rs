@@ -13,7 +13,7 @@ pub(crate) fn process_multiple_audio_files(audio_files: &Vec<String>, program_pa
     }
 
     audio_files.par_iter().for_each(|audio_file| {
-        let current_time = Local::now().format("%Y_%m_%d_%H_%M").to_string();
+        let current_time = Local::now().format("%Y_%m_%d_%H_%M_%S_%3f").to_string();
         let audio_stem = Path::new(audio_file).file_stem().unwrap().to_str().unwrap();
 
         program_paths.par_iter().for_each(|program_path| {
