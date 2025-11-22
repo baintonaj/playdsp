@@ -2,9 +2,10 @@
 
 ## Introduction
 
-After nearly 7 years of audio programming in C++/JUCE/Xcode/Pro Tools, I became frustrated with the design process of Audio Digital Signal Processing (DSP) algorithms. I would write new code, and by the time the plug-in would compile, copy, and load into Pro Tools, I would forget what I wrote. So I made this Command-Line Audio Signal Processing Framework.
+After nearly 7 years of audio programming in C++/JUCE/Xcode/Pro Tools, I became frustrated with the design process of Audio Digital Signal Processing (DSP) algorithms. I would write new code, and by the time the plug-in would compile, copy, and load into Pro Tools, I would forget what I wrote. So I made this Command-Line Audio Signal Processing Framework. 
 
-The framework has a JUCE-like structure for audio DSP backend processing in C++ and Rust. Feed it C++ and/or Rust code, and one or more WAV files, and it will process the files and write a new 32-bit float WAV, processed by the code you give it.
+The framework has a JUCE-like structure for audio DSP backend processing in C++ and Rust. Feed it C++ and/or Rust code, and one or more WAV files, and it will write a new 32-bit float WAV per programming language, processed by the code you give it.
+
 
 ## Overview
 
