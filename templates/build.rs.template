@@ -14,8 +14,17 @@ fn main() {
     if !cpp_files.is_empty() {
         let mut build = cc::Build::new();
         build.cpp(true);
-        build.flag_if_supported("-O3");
-        build.flag_if_supported("-std=c++20");
+        if cfg!(target_env = "msvc") {
+            build.flag("/O2");
+            build.flag("/std:c++20");
+            build.flag("/EHsc");
+        } else {
+            build.flag_if_supported("-O3");
+            build.flag_if_supported("-std=c++20");
+            if cfg!(target_os = "linux") {
+                build.flag_if_supported("-fPIC");
+            }
+        }
         build.include(&cpp_dir);
 
         for cpp_file in cpp_files {

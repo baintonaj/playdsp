@@ -115,8 +115,13 @@ Added 2 user dependencies to runtime Cargo.toml:
   rand = "0.8"
   rustfft = { version = "6.0", features = ["avx"] }
 Runtime project setup complete.
-Compiling runtime binary...
+⠸ Compiling runtime binary...
+Compilation complete in 12.3s
+[00:00:02] ████████████████████████████████████████ 4/4 done
+All files processed in 2.1s
 ```
+
+> The spinner animates during compilation. Compilation time varies — first builds may take 30–60 seconds as Cargo downloads and compiles dependencies; subsequent runs reuse the cached runtime.
 
 ## Notes
 

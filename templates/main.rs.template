@@ -20,10 +20,23 @@ fn main() {
 }
 
 fn process_audio(input_path: &str, output_path: &str, mode: &str) -> Result<(), String> {
-    let (header, samples_f64): (WaveFmt, Vec<Vec<f64>>) = read_wav(input_path)?;
+    let (header, mut samples_f64): (WaveFmt, Vec<Vec<f64>>) = read_wav(input_path)?;
+
+    let sample_rate = header.sample_rate as usize;
+    let num_channels = samples_f64.len();
+
+    let original_length = samples_f64[0].len();
+    let pre_pad_length = sample_rate; // 1 second of zeros
+    let post_pad_length = sample_rate * 12; // 12 seconds of zeros
+
+    for ch in samples_f64.iter_mut() {
+        let mut padded = vec![0.0_f64; pre_pad_length];
+        padded.append(ch);
+        padded.extend(vec![0.0_f64; post_pad_length]);
+        *ch = padded;
+    }
 
     const BUFFER_SIZE: usize = 1024;
-    let num_channels = samples_f64.len();
     let total_samples = samples_f64[0].len();
     let num_buffers = (total_samples + BUFFER_SIZE - 1) / BUFFER_SIZE;
 
@@ -61,8 +74,18 @@ fn process_audio(input_path: &str, output_path: &str, mode: &str) -> Result<(), 
         }
     }
 
-    let processed_samples: Vec<Vec<f32>> = processed_samples_2d_f64.iter()
-        .map(|channel| channel.iter().map(|&sample| sample as f32).collect())
+    let source_end_index = pre_pad_length + original_length;
+    let cutoff_index = detect_tail_cutoff(&processed_samples_2d_f64, source_end_index, sample_rate);
+    let final_samples_f64: Vec<Vec<f64>> = processed_samples_2d_f64.iter()
+        .map(|ch| ch[pre_pad_length..cutoff_index].to_vec())
+        .collect();
+
+    let processed_samples: Vec<Vec<f32>> = final_samples_f64.iter()
+        .map(|channel| {
+            let mut out = vec![0.0f32; channel.len()];
+            convert_f64_to_f32(channel, &mut out);
+            out
+        })
         .collect();
 
     if let Err(err) = write_wav(&output_path, &processed_samples, header) {
@@ -70,6 +93,52 @@ fn process_audio(input_path: &str, output_path: &str, mode: &str) -> Result<(), 
     }
 
     Ok(())
+}
+
+fn detect_tail_cutoff(samples: &[Vec<f64>], source_end_index: usize, sample_rate: usize) -> usize {
+    const TAIL_THRESHOLD: f64 = 6.31e-8; // -144 dBFS
+    const WINDOW_SIZE: usize = 1024;
+    let total_length = samples[0].len();
+    let hard_cap = (source_end_index + sample_rate * 12).min(total_length);
+    let mut pos = source_end_index;
+    while pos + WINDOW_SIZE <= hard_cap {
+        let sum_sq: f64 = samples.iter()
+            .flat_map(|ch| ch[pos..pos + WINDOW_SIZE].iter())
+            .map(|&s| s * s)
+            .sum();
+        let count = samples.len() * WINDOW_SIZE;
+        let rms = (sum_sq / count as f64).sqrt();
+        if rms < TAIL_THRESHOLD {
+            return pos;
+        }
+        pos += WINDOW_SIZE;
+    }
+    hard_cap
+}
+
+fn convert_f64_to_f32(input: &[f64], output: &mut [f32]) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use std::arch::x86_64::*;
+        if is_x86_feature_detected!("avx") {
+            let chunks = input.len() / 4;
+            unsafe {
+                for i in 0..chunks {
+                    let src = _mm256_loadu_pd(input.as_ptr().add(i * 4));
+                    let dst = _mm256_cvtpd_ps(src);
+                    _mm_storeu_ps(output.as_mut_ptr().add(i * 4), dst);
+                }
+            }
+            for i in (chunks * 4)..input.len() {
+                output[i] = input[i] as f32;
+            }
+            return;
+        }
+    }
+    // Scalar fallback (also used on non-x86 platforms)
+    for (o, &inp) in output.iter_mut().zip(input.iter()) {
+        *o = inp as f32;
+    }
 }
 
 fn read_wav(input_file_name: &str) -> Result<(WaveFmt, Vec<Vec<f64>>), String> {
@@ -117,11 +186,11 @@ fn write_wav(output_path: &str, processed_samples: &Vec<Vec<f32>>, header: WaveF
         .flat_map(|j| processed_samples.iter().map(move |row| row[j]))
         .collect();
 
-    let w = WaveWriter::create(output_path, output_format).unwrap();
-    let mut frame_writer = w.audio_frame_writer().unwrap();
+    let w = WaveWriter::create(output_path, output_format).map_err(|e| e.to_string())?;
+    let mut frame_writer = w.audio_frame_writer().map_err(|e| e.to_string())?;
 
-    frame_writer.write_frames::<f32>(values_vec.as_slice()).unwrap();
-    frame_writer.end().unwrap();
+    frame_writer.write_frames::<f32>(values_vec.as_slice()).map_err(|e| e.to_string())?;
+    frame_writer.end().map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -166,6 +235,16 @@ pub fn cpp_process_audio_wrapper(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64
             num_samples,
             flattened_output.as_mut_ptr(),
         );
+    }
+
+    // Validate C++ output for non-finite values
+    if flattened_output.iter().any(|&s| !s.is_finite()) {
+        eprintln!("Warning: C++ process produced non-finite values (NaN/Inf). Clamping to 0.0.");
+        for s in flattened_output.iter_mut() {
+            if !s.is_finite() {
+                *s = 0.0;
+            }
+        }
     }
 
     let mut k = 0;

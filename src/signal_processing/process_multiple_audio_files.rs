@@ -2,49 +2,72 @@ use std::path::Path;
 use std::process::Command;
 use rayon::prelude::*;
 use chrono::Local;
+use indicatif::{ProgressBar, ProgressStyle};
 use crate::constants::constants::*;
 
-pub(crate) fn process_multiple_audio_files(audio_files: &Vec<String>, program_paths: &Vec<String>) {
-    let runtime_binary = Path::new("../audio/.playdsp_runtime/target/release/playdsp_runtime");
+pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths: &[String]) {
+    let runtime_binary = std::path::PathBuf::from("../audio/.playdsp_runtime/target/release")
+        .join(format!("playdsp_runtime{}", std::env::consts::EXE_SUFFIX));
 
     if !runtime_binary.exists() {
         eprintln!("Runtime binary not found. This shouldn't happen after recompilation.");
         return;
     }
 
-    audio_files.par_iter().for_each(|audio_file| {
+    let pairs: Vec<(&String, &String)> = audio_files.iter()
+        .flat_map(|audio| program_paths.iter().map(move |prog| (audio, prog)))
+        .collect();
+
+    let pb = ProgressBar::new(pairs.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("=>-"),
+    );
+
+    let processing_start = std::time::Instant::now();
+
+    pairs.par_iter().for_each(|(audio_file, program_path)| {
         let current_time = Local::now().format("%Y_%m_%d_%H_%M_%S_%3f").to_string();
-        let audio_stem = Path::new(audio_file).file_stem().unwrap().to_str().unwrap();
+        let audio_stem = Path::new(audio_file.as_str())
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
 
-        program_paths.par_iter().for_each(|program_path| {
-            let program_suffix  = Path::new(program_path)
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("");
+        let program_suffix = Path::new(program_path.as_str())
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
 
-            if Path::new(&program_path).exists() {
-                let output_file = format!("{}/{}_processed_{}_{}.wav", RESULT_FOLDER, audio_stem, current_time, program_suffix);
+        if Path::new(program_path.as_str()).exists() {
+            let output_file = RESULT_FOLDER.join(
+                format!("{}_processed_{}_{}.wav", audio_stem, current_time, program_suffix)
+            );
 
-                let status = Command::new(&runtime_binary)
-                    .arg(audio_file)
-                    .arg(&output_file)
-                    .arg(program_suffix)
-                    .status();
+            let mut cmd = Command::new(&runtime_binary);
+            cmd.arg(audio_file.as_str())
+               .arg(&output_file)
+               .arg(program_suffix);
 
-                match status {
-                    Ok(exit_status) if exit_status.success() => {
-                        println!("Processed audio file saved to: {}", output_file);
-                    }
-                    Ok(exit_status) => {
-                        eprintln!("Error processing audio file {}: runtime exited with status {}", audio_file, exit_status);
-                    }
-                    Err(e) => {
-                        eprintln!("Error running runtime binary: {}", e);
-                    }
+            match cmd.status() {
+                Ok(exit_status) if exit_status.success() => {
+                    println!("Processed audio file saved to: {}", output_file.display());
                 }
-            } else {
-                eprintln!("program file not found: {}", program_path);
+                Ok(exit_status) => {
+                    eprintln!("Error processing audio file {}: runtime exited with status {}", audio_file, exit_status);
+                }
+                Err(e) => {
+                    eprintln!("Error running runtime binary: {}", e);
+                }
             }
-        });
+        } else {
+            eprintln!("program file not found: {}", program_path);
+        }
+
+        pb.inc(1);
     });
+
+    pb.finish_with_message("done");
+    println!("All files processed in {:.1}s", processing_start.elapsed().as_secs_f64());
 }

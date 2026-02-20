@@ -2,7 +2,7 @@
 
 ## Introduction
 
-After nearly 7 years of audio programming in C++/JUCE/Xcode/Pro Tools, I became frustrated with the design process of Audio Digital Signal Processing (DSP) algorithms. I would write new code, and by the time the plug-in would compile, copy, and load into Pro Tools, I would lose immediacy with what I had written. So I made this Command-Line Audio Signal Processing Framework. 
+After nearly 7 years of audio programming in C++/JUCE/Xcode/Pro Tools, I became frustrated with the design process of Audio Digital Signal Processing (DSP) algorithms. I would write new code, and by the time the plug-in would compile, copy, and load into Pro Tools, I would lose immediacy with what I had written. So I made this Command-Line Audio Signal Processing Framework.
 
 The framework has a JUCE-like structure for audio DSP backend processing in C++ and Rust. Feed it C++ and/or Rust code, and one or more WAV files, and it will write a new 32-bit float WAV per input WAV file per programming language, processed by the code you give it.
 
@@ -23,6 +23,10 @@ High-performance tool that compiles and executes Rust and/or C++ DSP code agains
 - **Portable**: No installation of source files required - main binary is self-contained
 - **Format support**: 16-bit, 24-bit, 32-bit integer PCM and 32-bit float WAV files
 - **Fixed buffer size**: 1024 samples per buffer for all sample rates
+- **Automatic reverb tail capture**: Every run pads audio with 1s of silence before and up to 12s after; output is trimmed at -144 dBFS so reverb/delay tails are always fully captured
+- **Cross-platform paths**: PathBuf-based path construction for Windows, macOS, and Linux
+- **Progress feedback**: Spinner during runtime compilation; progress bar with elapsed time during audio processing
+- **Auto SIMD**: f64→f32 conversion uses AVX intrinsics with scalar fallback on supported hardware
 
 ## Installation
 
@@ -251,10 +255,12 @@ playdsp --code ../my-dsp-code --audio ../my-audio-files
    - Recursively scans all `.rs` files for external crate dependencies
    - Recursively compiles all `.cpp` files from `cpp/` folder with C++20 (if present)
    - Supports nested subdirectories for both languages
+   - Shows indicatif spinner during cargo build with elapsed compile time upon completion
 3. **Audio Processing**:
    - All input formats (16/24/32-bit PCM, 32/64-bit float) converted to f64
-   - Runtime binary processes each audio file in 1024-sample buffers
-   - Audio normalized to -1.0 to 1.0 range
+   - Audio padded with 1s of silence before and 12s after; full padded signal passes through user DSP
+   - Output trimmed at the first 1024-sample window below -144 dBFS after source end (reverb tail capture)
+   - Progress bar shows file-level processing progress with elapsed time
 4. **Output**: Processed files saved as `{filename}_processed_{timestamp}_{rs|cpp}.wav` (32-bit float)
 
 **Recompiling After Code Changes:**
@@ -293,7 +299,10 @@ Fixed at **1024 samples per buffer** for all sample rates.
 ## Technical Details
 
 - **C++ Standard**: C++20
-- **Optimization**: `-O3` for C++ compilation
+- **Optimization**: Platform-conditional — `-O3` on GCC/Clang; `/O2` + `/EHsc` on MSVC. Linux also adds `-fPIC`.
+- **SIMD**: AVX intrinsics for f64→f32 sample conversion; scalar fallback on non-AVX hardware
+- **Release profile**: LTO + single codegen unit for the runtime binary
+- **MSRV**: Rust 1.85 (required for edition 2024)
 - **Input Audio Formats**: 16/24/32-bit integer PCM, 32-bit float WAV (bwavfile handles conversion)
 - **Processing Format**: All audio automatically converted to 64-bit float (-1.0 to 1.0)
 - **Output Format**: 32-bit float WAV (IEEE 754)
@@ -312,7 +321,7 @@ The tool provides clear error messages for:
 
 ## Requirements
 
-- Rust toolchain (for building playdsp)
+- Rust toolchain 1.85+ (for building playdsp; required for edition 2024)
 - C++ compiler (for C++ DSP code support)
 - Cargo (included with Rust)
 

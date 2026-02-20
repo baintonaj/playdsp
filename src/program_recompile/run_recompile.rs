@@ -1,9 +1,11 @@
 use crate::constants::constants::*;
 use clap::ArgMatches;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::exit;
 use std::process::Command;
+use std::time::Duration;
 use std::{fs, io};
 
 const CARGO_TOML_TEMPLATE: &str = include_str!("../../templates/Cargo.toml.template");
@@ -16,7 +18,7 @@ pub(crate) fn run_recompile(_matches: &ArgMatches) {
 
     println!("Setting up runtime environment...");
 
-    let processing_dir = Path::new(PROGRAM_FOLDER);
+    let processing_dir = &*PROGRAM_FOLDER;
     if let Err(e) = setup_runtime_project(&runtime_dir, processing_dir) {
         eprintln!("Failed to setup runtime project: {}", e);
         exit(1);
@@ -29,7 +31,17 @@ pub(crate) fn run_recompile(_matches: &ArgMatches) {
         exit(1);
     }
 
-    println!("Compiling runtime binary...");
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
+    pb.set_message("Compiling runtime binary...");
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    let compile_start = std::time::Instant::now();
+
     let status = Command::new("cargo")
         .arg("build")
         .arg("--release")
@@ -37,12 +49,14 @@ pub(crate) fn run_recompile(_matches: &ArgMatches) {
         .status()
         .expect("Failed to run cargo build");
 
+    pb.finish_and_clear();
+
     if !status.success() {
         eprintln!("Failed to compile runtime");
         exit(1);
     }
 
-    println!("Compilation complete.");
+    println!("Compilation complete in {:.1}s", compile_start.elapsed().as_secs_f64());
     println!("Runtime binary ready at: {:?}", runtime_dir.join("target/release/playdsp_runtime"));
 }
 
