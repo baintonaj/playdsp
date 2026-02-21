@@ -3,8 +3,7 @@ use clap::ArgMatches;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::process::exit;
-use std::process::Command;
+use std::process::{exit, Command, Stdio};
 use std::time::Duration;
 use std::{fs, io};
 
@@ -16,15 +15,11 @@ pub(crate) fn run_recompile(_matches: &ArgMatches) {
     let audio_dir = Path::new("../audio");
     let runtime_dir = audio_dir.join(".playdsp_runtime");
 
-    println!("Setting up runtime environment...");
-
     let processing_dir = &*PROGRAM_FOLDER;
     if let Err(e) = setup_runtime_project(&runtime_dir, processing_dir) {
         eprintln!("Failed to setup runtime project: {}", e);
         exit(1);
     }
-
-    println!("Runtime project setup complete.");
 
     if let Err(e) = inject_user_rust_code(&runtime_dir, processing_dir) {
         eprintln!("Failed to inject user Rust code: {}", e);
@@ -42,22 +37,24 @@ pub(crate) fn run_recompile(_matches: &ArgMatches) {
 
     let compile_start = std::time::Instant::now();
 
-    let status = Command::new("cargo")
+    let output = Command::new("cargo")
         .arg("build")
         .arg("--release")
         .current_dir(&runtime_dir)
-        .status()
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
         .expect("Failed to run cargo build");
 
     pb.finish_and_clear();
 
-    if !status.success() {
-        eprintln!("Failed to compile runtime");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("Failed to compile runtime:\n{}", stderr);
         exit(1);
     }
 
-    println!("Compilation complete in {:.1}s", compile_start.elapsed().as_secs_f64());
-    println!("Runtime binary ready at: {:?}", runtime_dir.join("target/release/playdsp_runtime"));
+    println!("Compiled in {:.1}s", compile_start.elapsed().as_secs_f64());
 }
 
 fn setup_runtime_project(runtime_dir: &Path, processing_dir: &Path) -> io::Result<()> {
@@ -70,14 +67,6 @@ fn setup_runtime_project(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
 
     fs::write(runtime_dir.join("build.rs"), BUILD_RS_TEMPLATE)?;
     fs::write(runtime_dir.join("src/main.rs"), MAIN_RS_TEMPLATE)?;
-    println!("Created runtime project structure at {:?}", runtime_dir);
-
-    if !dependencies.is_empty() {
-        println!("Added {} user dependencies to runtime Cargo.toml:", dependencies.len());
-        for (name, version) in dependencies.iter() {
-            println!("  {} = \"{}\"", name, version);
-        }
-    }
 
     Ok(())
 }
@@ -95,8 +84,6 @@ fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
         }
 
         copy_dir_recursive(&rust_dir, &runtime_user_code_dir)?;
-
-        println!("Copied user Rust code from rust/ folder to runtime");
 
         if rust_process_file.exists() {
             // Create a mod.rs file in user_code directory to make it a proper module
@@ -139,8 +126,6 @@ fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
                 }
             }
         }
-    } else {
-        println!("No rust/ folder found, using default pass-through implementation");
     }
     Ok(())
 }
@@ -189,17 +174,11 @@ fn parse_user_dependencies(processing_dir: &Path) -> io::Result<HashMap<String, 
                     }
                 }
             }
-            println!("Found dependencies.toml with {} explicit dependencies", dependencies.len());
         }
     }
 
     if rust_dir.exists() {
         let local_modules = collect_local_modules(&rust_dir);
-        if !local_modules.is_empty() {
-            println!("Detected {} local modules (will be excluded from dependencies): {:?}",
-                     local_modules.len(), local_modules);
-        }
-
         scan_rust_dependencies_recursive(&rust_dir, &mut dependencies, &local_modules);
     }
 
@@ -266,7 +245,6 @@ fn scan_rust_dependencies_recursive(dir: &Path, dependencies: &mut HashMap<Strin
                         for crate_name in detected {
                             if !dependencies.contains_key(&crate_name) {
                                 dependencies.insert(crate_name.clone(), "\"*\"".to_string());
-                                println!("Auto-detected dependency: {} (using latest version)", crate_name);
                             }
                         }
                     }

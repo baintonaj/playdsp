@@ -52,17 +52,17 @@ pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths
 
             match cmd.status() {
                 Ok(exit_status) if exit_status.success() => {
-                    println!("Processed audio file saved to: {}", output_file.display());
+                    pb.println(format!("  → {}", output_file.display()));
                 }
                 Ok(exit_status) => {
-                    eprintln!("Error processing audio file {}: runtime exited with status {}", audio_file, exit_status);
+                    pb.println(format!("  ✗ {}: runtime exited with {}", audio_file, exit_status));
                 }
                 Err(e) => {
-                    eprintln!("Error running runtime binary: {}", e);
+                    pb.println(format!("  ✗ runtime error: {}", e));
                 }
             }
         } else {
-            eprintln!("program file not found: {}", program_path);
+            pb.println(format!("  ✗ program file not found: {}", program_path));
         }
 
         pb.inc(1);

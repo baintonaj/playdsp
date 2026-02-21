@@ -165,24 +165,15 @@ fn main() {
         cpp_files = get_program_files(CPP_FOLDER.to_str().unwrap_or(""), "cpp");
     }
 
-    let processing_start = std::time::Instant::now();
-
     if !rust_present && !cpp_present {
-        println!("Rust files: {:?}", rust_files);
-        println!("C++ files: {:?}", cpp_files);
         let mut all_files = Vec::new();
         all_files.append(rust_files.as_mut());
         all_files.append(cpp_files.as_mut());
         process_multiple_audio_files(&audio_files_to_process, &all_files);
-        println!("Processing complete in {:.1}s", processing_start.elapsed().as_secs_f64());
     } else if rust_present {
-        println!("Rust files: {:?}", rust_files);
         process_multiple_audio_files(&audio_files_to_process, &rust_files);
-        println!("Processing complete in {:.1}s", processing_start.elapsed().as_secs_f64());
     } else if cpp_present {
-        println!("C++ files: {:?}", cpp_files);
         process_multiple_audio_files(&audio_files_to_process, &cpp_files);
-        println!("Processing complete in {:.1}s", processing_start.elapsed().as_secs_f64());
     }
 
 }
