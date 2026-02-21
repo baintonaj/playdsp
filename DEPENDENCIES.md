@@ -31,7 +31,7 @@ pub struct Biquad {
 When you run `playdsp`, it will automatically:
 1. Recursively scan all `.rs` files in the `rust/` folder
 2. Detect `rand`, `num_complex`, and `ndarray` from the use statements
-3. Add them to the runtime Cargo.toml with the latest version (`"*"`)
+3. Add them to the runtime Cargo.toml with the latest version (`"*"`) — silently, without printing each detection
 4. Compile the runtime with these dependencies
 
 ## Explicit Version Control (Recommended)
@@ -108,20 +108,17 @@ rustfft = { version = "6.0", features = ["avx"] }
 When you run `playdsp`, you'll see:
 
 ```
-Setting up runtime environment...
-Found dependencies.toml with 2 explicit dependencies
-Created runtime project structure at "../audio/.playdsp_runtime"
-Added 2 user dependencies to runtime Cargo.toml:
-  rand = "0.8"
-  rustfft = { version = "6.0", features = ["avx"] }
-Runtime project setup complete.
+DSP code detected - recompiling runtime to ensure latest changes...
 ⠸ Compiling runtime binary...
-Compilation complete in 12.3s
-[00:00:02] ████████████████████████████████████████ 4/4 done
+Compiled in 12.3s
+Processing with both Rust and C++ code
+  → ../audio/result/track_processed_2026_02_21_..._rs.wav
+  → ../audio/result/track_processed_2026_02_21_..._cpp.wav
+[00:00:02] ======================================== 4/4 done
 All files processed in 2.1s
 ```
 
-> The spinner animates during compilation. Compilation time varies — first builds may take 30–60 seconds as Cargo downloads and compiles dependencies; subsequent runs reuse the cached runtime.
+> The spinner animates during compilation; cargo's build output is suppressed and only shown if compilation fails (e.g. a syntax error in your DSP code). Compilation time varies — first builds may take 30–60 seconds as Cargo downloads and compiles dependencies; subsequent runs reuse the cached runtime.
 
 ## Notes
 

@@ -64,6 +64,20 @@ cargo uninstall playdsp
 
 To update playdsp after pulling new changes:
 
+### Option A: One-step reinstall (recommended)
+
+```bash
+sudo make reinstall
+```
+
+This runs `make clean`, `make release`, and `make install` in sequence. Pass `DESTDIR` if you installed to a non-default location:
+
+```bash
+sudo make reinstall DESTDIR=/usr/local/bin
+```
+
+### Option B: Manual steps
+
 1. Rebuild the binary:
 ```bash
 cargo build --release

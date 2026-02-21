@@ -16,6 +16,19 @@ cargo run -- -d <dir>          # Import code from external directory
 cargo run -- -a <dir>          # Import audio from external directory
 ```
 
+Or via the Makefile:
+
+```bash
+make                           # Release build (default)
+make build                     # Debug build
+make release                   # Release build
+sudo make install              # Install to /usr/local/bin (Unix default)
+sudo make reinstall            # Clean + rebuild + install in one step
+make install-cargo             # Install via cargo install (cross-platform)
+sudo make uninstall            # Remove installed binary
+make help                      # Show all targets and current DESTDIR
+```
+
 There are no tests or linting configured in this project.
 
 ## Architecture
@@ -32,8 +45,8 @@ PlayDSP is a CLI tool that compiles and executes user-written Rust and/or C++ DS
    - Merges auto-detected deps with explicit `dependencies.toml` entries
    - Copies user Rust code as a `user_code` module and patches `main.rs` to delegate to it
    - Compiles C++ via the `cc` crate (C++20, `-O3` on GCC/Clang; `/O2`+`/EHsc` on MSVC)
-   - Runs `cargo build --release` on the runtime project (with `indicatif` spinner and elapsed time)
-4. **Parallel processing** (`src/signal_processing/`) — uses Rayon to invoke the runtime binary concurrently across all `(audio_file, program_path)` pairs via a single flattened `par_iter`. Shows an `indicatif` progress bar and reports elapsed time.
+   - Runs `cargo build --release` with stdout suppressed and stderr piped; `indicatif` spinner animates during compilation; stderr is surfaced only on failure; elapsed time printed on success
+4. **Parallel processing** (`src/signal_processing/`) — uses Rayon to invoke the runtime binary concurrently across all `(audio_file, program_path)` pairs via a single flattened `par_iter`. Per-file results are printed above the bar via `pb.println()` (thread-safe); progress bar tracks total pair count with elapsed time.
 
 ### Key Directory Layout (runtime, relative to execution dir)
 

@@ -25,7 +25,7 @@ High-performance tool that compiles and executes Rust and/or C++ DSP code agains
 - **Fixed buffer size**: 1024 samples per buffer for all sample rates
 - **Automatic reverb tail capture**: Every run pads audio with 1s of silence before and up to 12s after; output is trimmed at -144 dBFS so reverb/delay tails are always fully captured
 - **Cross-platform paths**: PathBuf-based path construction for Windows, macOS, and Linux
-- **Progress feedback**: Spinner during runtime compilation; progress bar with elapsed time during audio processing
+- **Clean terminal output**: Spinner during runtime compilation (cargo output suppressed, shown only on error); per-file results printed thread-safely above a progress bar during audio processing
 - **Auto SIMD**: f64→f32 conversion uses AVX intrinsics with scalar fallback on supported hardware
 
 ## Installation
@@ -255,12 +255,12 @@ playdsp --code ../my-dsp-code --audio ../my-audio-files
    - Recursively scans all `.rs` files for external crate dependencies
    - Recursively compiles all `.cpp` files from `cpp/` folder with C++20 (if present)
    - Supports nested subdirectories for both languages
-   - Shows indicatif spinner during cargo build with elapsed compile time upon completion
+   - Shows indicatif spinner during cargo build; cargo output is suppressed and shown only on error; elapsed compile time printed on success
 3. **Audio Processing**:
    - All input formats (16/24/32-bit PCM, 32/64-bit float) converted to f64
    - Audio padded with 1s of silence before and 12s after; full padded signal passes through user DSP
    - Output trimmed at the first 1024-sample window below -144 dBFS after source end (reverb tail capture)
-   - Progress bar shows file-level processing progress with elapsed time
+   - Per-file results printed above the progress bar via `pb.println()` (thread-safe); progress bar tracks total file count with elapsed time
 4. **Output**: Processed files saved as `{filename}_processed_{timestamp}_{rs|cpp}.wav` (32-bit float)
 
 **Recompiling After Code Changes:**
@@ -324,6 +324,50 @@ The tool provides clear error messages for:
 - Rust toolchain 1.85+ (for building playdsp; required for edition 2024)
 - C++ compiler (for C++ DSP code support)
 - Cargo (included with Rust)
+
+## Version History
+
+### v0.3.0 (February 2026)
+
+**Audio processing**
+- **Reverb tail capture (always-on)**: every run now pre-pads 1 second and post-pads 12 seconds of silence around the source audio, processes the full padded signal, then trims the output at the first 1024-sample window that falls below −144 dBFS (hard-capped at 12 seconds post-source). DSP with no reverb tail (gain, EQ, clipping) is unaffected — the RMS drops below threshold immediately and output length is unchanged.
+- **AVX SIMD f64→f32 conversion**: uses `_mm256_cvtpd_ps` with a runtime `is_x86_feature_detected!` guard and a scalar fallback for non-AVX hardware.
+- **C++ NaN/Inf validation**: output buffer validated after every FFI call; non-finite values are clamped to 0.0 with a warning.
+- **WAV write error handling**: `unwrap()` calls in `write_wav` replaced with proper `?` propagation.
+
+**Compilation**
+- **Release profile optimised**: runtime `Cargo.toml` now sets `lto = true` and `codegen-units = 1` for smaller, faster binaries.
+- **Cross-platform C++ flags**: MSVC gets `/O2 /std:c++20 /EHsc`; GCC/Clang get `-O3 -std=c++20`; Linux additionally gets `-fPIC`.
+- **Windows binary path**: runtime resolved with `std::env::consts::EXE_SUFFIX` so `playdsp_runtime.exe` is found correctly on Windows.
+- **MSRV pinned**: `rust-version = "1.85"` added to `Cargo.toml` (required for edition 2024).
+
+**Terminal output**
+- **Animated spinner** with elapsed time during runtime compilation (`indicatif`).
+- **Progress bar** (cyan/blue) tracking all `(audio file × program)` pairs during processing, with elapsed time.
+- **Clean output**: cargo build stdout/stderr suppressed during compilation — output is shown only if compilation fails. Per-file results printed above the progress bar via `pb.println()` (thread-safe, no interleaving).
+
+**Parallelism**
+- Processing refactored to a single flattened `par_iter` over all `(audio_file, program_path)` pairs instead of nested parallel iterators.
+- Explicit thread pool initialisation via `rayon::ThreadPoolBuilder` with `available_parallelism()`.
+
+**Developer experience**
+- `CLAUDE.md` added with full architecture documentation for AI-assisted development.
+- `Makefile` added with targets: `all`, `build`, `release`, `install`, `reinstall` (clean + rebuild + install in one step), `install-cargo`, `uninstall`, `clean`, `help`.
+
+---
+
+### v0.2.0
+
+- Initial public release.
+- Dual-language support: Rust and C++ DSP code compiled and executed against WAV files.
+- `new` subcommand to scaffold the `audio/` folder structure.
+- Auto-detection of external Rust crate dependencies from `use` statements across all `.rs` files.
+- `dependencies.toml` for explicit dependency versions and feature flags.
+- Multi-file Rust module support: entire `rust/` folder copied into the runtime as a `user_code` module.
+- Multi-file C++ support: all `.cpp`/`.h`/`.hpp` files in `cpp/` and its subdirectories compiled and linked.
+- Parallel audio processing with Rayon across all input files.
+- `-d`/`--code` and `-a`/`--audio` flags to import code and audio from external directories.
+- 16-bit, 24-bit, and 32-bit integer PCM and 32-bit float WAV input; 32-bit float WAV output.
 
 ## License
 

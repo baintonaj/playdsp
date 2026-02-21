@@ -5,6 +5,7 @@
 #   build          Build debug binary
 #   release        Build optimised release binary
 #   install        Copy release binary to DESTDIR
+#   reinstall      Clean, rebuild, and reinstall in one step (run with sudo on Unix)
 #   install-cargo  Install via `cargo install` (simplest cross-platform option)
 #   uninstall      Remove binary from DESTDIR
 #   clean          Remove Cargo build artifacts
@@ -20,6 +21,7 @@
 #   make install                      # install to default location
 #   make install DESTDIR=$(HOME)/.local/bin
 #   sudo make install DESTDIR=/usr/local/bin
+#   sudo make reinstall               # clean + rebuild + install in one step
 #   make install-cargo                # always works, no DESTDIR needed
 
 # ---------------------------------------------------------------------------
@@ -53,7 +55,7 @@ DEBUG_BIN   := target/debug/$(BIN)
 # Targets
 # ---------------------------------------------------------------------------
 
-.PHONY: all build release install install-cargo uninstall clean help
+.PHONY: all build release install reinstall install-cargo uninstall clean help
 
 all: release
 
@@ -67,6 +69,11 @@ install: release
 	$(_MKDIR) "$(DESTDIR)"
 	$(_CP) "$(RELEASE_BIN)" "$(DESTDIR)/$(BIN)"
 	@echo "Installed: $(DESTDIR)/$(BIN)"
+
+reinstall:
+	$(MAKE) clean
+	$(MAKE) release
+	$(MAKE) install
 
 # Universal install — handles .exe suffix and PATH automatically.
 # Recommended for Windows users without a POSIX shell.
@@ -89,6 +96,7 @@ help:
 	@echo "  build          Build debug binary"
 	@echo "  release        Build optimised release binary"
 	@echo "  install        Copy release binary to DESTDIR"
+	@echo "  reinstall      Clean, rebuild, and reinstall in one step"
 	@echo "  install-cargo  Install via 'cargo install' (cross-platform, no DESTDIR needed)"
 	@echo "  uninstall      Remove binary from DESTDIR"
 	@echo "  clean          Remove Cargo build artifacts"
@@ -101,5 +109,6 @@ help:
 	@echo "  make install"
 	@echo "  make install DESTDIR=\$$HOME/.local/bin"
 	@echo "  sudo make install DESTDIR=/usr/local/bin"
+	@echo "  sudo make reinstall"
 	@echo "  make install-cargo"
 	@echo ""
