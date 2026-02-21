@@ -104,6 +104,15 @@ For DSP with no tail (gain, EQ, clipper) the RMS drops below threshold immediate
 
 Signature validation is whitespace-normalised — extra spaces and newlines in the user's file are tolerated.
 
+### Persistent State
+
+Both entry-point functions are called once per 1024-sample buffer. Local variables are destroyed at the end of each call, so filter states, delay-line read/write heads, envelope followers, and any other cross-buffer data must live outside the function.
+
+The starter files written by `playdsp new` (`create_folders_and_copy_files.rs`) include commented-out working examples of both patterns:
+
+- **Rust**: `static STATE: LazyLock<Mutex<State>>` — initialised once on the first buffer call, locked for the duration of each call. Per-channel `Vec`s are grown lazily because channel count is only known at call time.
+- **C++**: `static State state;` declared as a static local variable inside `cpp_process()` — C++ guarantees construction on the first call and lifetime for the rest of the program. Per-channel `std::vector`s are grown lazily for the same reason.
+
 ### MSRV
 
 Requires **rustc 1.85+** (`edition = "2024"`, `rust-version = "1.85"` in `Cargo.toml`). The runtime template uses edition 2021 and has no special MSRV constraint beyond what `bwavfile` and `cc` require.
