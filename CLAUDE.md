@@ -108,10 +108,10 @@ Signature validation is whitespace-normalised — extra spaces and newlines in t
 
 Both entry-point functions are called once per 1024-sample buffer. Local variables are destroyed at the end of each call, so filter states, delay-line read/write heads, envelope followers, and any other cross-buffer data must live outside the function.
 
-The starter files written by `playdsp new` (`create_folders_and_copy_files.rs`) include commented-out working examples of both patterns:
+The starter files written by `playdsp new` (`create_folders_and_copy_files.rs`) scaffold this pattern by default — the entry-point functions are lock-and-delegate wrappers; all DSP logic lives inside `State::process()`:
 
-- **Rust**: `static STATE: LazyLock<Mutex<State>>` — initialised once on the first buffer call, locked for the duration of each call. Per-channel `Vec`s are grown lazily because channel count is only known at call time.
-- **C++**: `static State state;` declared as a static local variable inside `cpp_process()` — C++ guarantees construction on the first call and lifetime for the rest of the program. Per-channel `std::vector`s are grown lazily for the same reason.
+- **Rust**: `static STATE: LazyLock<Mutex<State>>` — initialised once on the first buffer call. `rust_process()` calls `STATE.lock().unwrap().process(input, output)` and returns. Add fields to `State` and implement them in `State::process()`. Per-channel `Vec`s are grown lazily because channel count is only known at call time.
+- **C++**: Four statics inside `cpp_process()` — `state_mutex`, `state`, `input_vector`, `output_vector` — all protected by `std::scoped_lock` (C++17, full mutual exclusion; not just init-safe). `input_vector`/`output_vector` are reused every call, eliminating per-buffer heap allocation; they are resized lazily when dimensions change. `State::process()` receives the pre-deinterleaved 2D vectors by reference and does only DSP — no raw pointer arithmetic inside DSP logic. Add fields to `State` and implement them in `State::process()`.
 
 ### MSRV
 

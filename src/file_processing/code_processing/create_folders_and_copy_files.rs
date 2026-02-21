@@ -31,57 +31,46 @@ r#"// ==========================================================================
 // live *outside* this function.
 //
 //
-// PERSISTENT STATE — LazyLock<Mutex<T>>
-// ---------------------------------------
-// Declare a state struct and wrap it in a LazyLock<Mutex<...>> static. The
-// static is initialised exactly once (on the first buffer call) and lives
-// for the entire duration of the run. Lock it at the top of rust_process()
-// to obtain a mutable reference valid for the duration of that call.
+// PERSISTENT STATE — LazyLock<Mutex<State>>
+// ------------------------------------------
+// All DSP logic lives inside State::process(). Add fields to State for any
+// data that must persist across buffer calls (filter registers, delay lines,
+// envelope followers, etc.).
 //
 // The channel count is only known at call time, so size any per-channel
-// Vecs lazily (resize on first call, or when the Vec is too short).
+// Vecs lazily — check the length and resize before use:
 //
-// Example — a simple 1-sample feedback delay across every channel:
-//
-//   use std::sync::{LazyLock, Mutex};
-//
-//   struct State {
-//       prev_sample: Vec<f64>, // one value per channel; grown lazily
-//   }
-//
-//   static STATE: LazyLock<Mutex<State>> =
-//       LazyLock::new(|| Mutex::new(State { prev_sample: Vec::new() }));
-//
-//   pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
-//       let mut state = STATE.lock().unwrap();
-//
-//       // Extend if channel count wasn't known at initialisation time.
-//       if state.prev_sample.len() < input.len() {
-//           state.prev_sample.resize(input.len(), 0.0);
-//       }
-//
-//       for (ch, (in_ch, out_ch)) in
-//           input.iter().zip(output.iter_mut()).enumerate()
-//       {
-//           for (x, y) in in_ch.iter().zip(out_ch.iter_mut()) {
-//               // Mix current sample with 50% of the previous output.
-//               *y = *x + 0.5 * state.prev_sample[ch];
-//               state.prev_sample[ch] = *y;
-//           }
-//       }
+//   if self.prev_sample.len() < input.len() {
+//       self.prev_sample.resize(input.len(), 0.0);
 //   }
 //
 // ============================================================================
 
-pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
-    let gain_db = -12.0;
-    let gain_linear = 10.0_f64.powf(gain_db / 20.0);
+use std::sync::{LazyLock, Mutex};
 
-    for (in_channel, out_channel) in input.iter().zip(output.iter_mut()) {
-        for (in_sample, out_sample) in in_channel.iter().zip(out_channel.iter_mut()) {
-            *out_sample = in_sample * gain_linear;
+struct State {
+    // Add per-channel DSP state here.
+    // Example: prev_sample: Vec<f64>,
+}
+
+impl State {
+    fn process(&mut self, input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
+        let gain_db = -12.0;
+        let gain_linear = 10.0_f64.powf(gain_db / 20.0);
+
+        for (in_channel, out_channel) in input.iter().zip(output.iter_mut()) {
+            for (in_sample, out_sample) in in_channel.iter().zip(out_channel.iter_mut()) {
+                *out_sample = in_sample * gain_linear;
+            }
         }
     }
+}
+
+static STATE: LazyLock<Mutex<State>> =
+    LazyLock::new(|| Mutex::new(State {}));
+
+pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
+    STATE.lock().unwrap().process(input, output);
 }"#;
 
     let cpp_file_content =
@@ -98,82 +87,76 @@ r#"// ==========================================================================
 // function.
 //
 //
-// PERSISTENT STATE — static struct
-// ----------------------------------
-// Declare a plain struct that holds your DSP state, then declare it as a
-// static local variable inside cpp_process(). C++ guarantees the variable
-// is constructed exactly once (on the first call) and lives for the rest of
-// the program. Access it directly by name on subsequent calls.
+// PERSISTENT STATE — State::process() + std::scoped_lock
+// -------------------------------------------------------
+// All DSP logic lives inside State::process(). Add fields to State for any
+// data that must persist across buffer calls (filter registers, delay lines,
+// envelope followers, etc.).
+//
+// cpp_process() also holds static input/output working buffers that are
+// resized lazily — avoiding repeated heap allocation on every call.
+// All statics are protected by the same std::scoped_lock.
 //
 // The channel count is only known at call time, so size any per-channel
-// vectors lazily (resize on first call, or when the vector is too short).
+// vectors lazily — check the size and resize before use:
 //
-// Example — a simple 1-sample feedback delay across every channel:
-//
-//   #include <cstddef>
-//   #include <vector>
-//
-//   struct State {
-//       std::vector<double> prev_sample; // one value per channel; grown lazily
-//   };
-//
-//   extern "C" void cpp_process(const double* input, size_t num_channels,
-//                               size_t num_samples, double* output) {
-//       static State state; // constructed once, persists across every call
-//
-//       // Extend if channel count wasn't known at construction time.
-//       if (state.prev_sample.size() < num_channels)
-//           state.prev_sample.resize(num_channels, 0.0);
-//
-//       for (size_t s = 0; s < num_samples; ++s) {
-//           for (size_t ch = 0; ch < num_channels; ++ch) {
-//               size_t k = s * num_channels + ch;
-//               // Mix current sample with 50% of the previous output.
-//               double y = input[k] + 0.5 * state.prev_sample[ch];
-//               output[k] = y;
-//               state.prev_sample[ch] = y;
-//           }
-//       }
-//   }
+//   if (prev_sample.size() < num_channels)
+//       prev_sample.resize(num_channels, 0.0);
 //
 // ============================================================================
 
 #include <cstddef>
 #include <cmath>
+#include <mutex>
 #include <vector>
+
+struct State {
+    // Add per-channel DSP state here.
+    // Example: std::vector<double> prev_sample;
+
+    void process(std::vector<std::vector<double>>& input_vector,
+                 std::size_t num_channels, std::size_t num_samples,
+                 std::vector<std::vector<double>>& output_vector) {
+        double gain_db     = -12.0;
+        double gain_linear = std::pow(10.0, gain_db / 20.0);
+
+        for (std::size_t channel = 0; channel < num_channels; channel++) {
+            for (std::size_t sample = 0; sample < num_samples; sample++) {
+                output_vector[channel][sample] =
+                    input_vector[channel][sample] * gain_linear;
+            }
+        }
+    }
+};
 
 extern "C" void cpp_process(const double* input, size_t num_channels,
                              size_t num_samples, double* output) {
-    std::vector<std::vector<double>> input_vector(num_channels,
-        std::vector<double>(num_samples, 0.0));
-    std::vector<std::vector<double>> output_vector(num_channels,
-        std::vector<double>(num_samples, 0.0));
+    static std::mutex                        state_mutex;
+    static State                             state;
+    static std::vector<std::vector<double>>  input_vector;
+    static std::vector<std::vector<double>>  output_vector;
+    std::scoped_lock lock(state_mutex);
 
+    // Resize working buffers lazily when dimensions change.
+    if (input_vector.size() != num_channels ||
+        (!input_vector.empty() && input_vector[0].size() != num_samples)) {
+        input_vector.assign(num_channels,  std::vector<double>(num_samples, 0.0));
+        output_vector.assign(num_channels, std::vector<double>(num_samples, 0.0));
+    }
+
+    // Deinterleave: interleaved → [channel][sample].
     std::size_t k = 0;
-    for (std::size_t sample = 0; sample < num_samples; sample++) {
-        for (std::size_t channel = 0; channel < num_channels; channel++) {
-            input_vector[channel][sample] = input[k];
-            k++;
-        }
-    }
+    for (std::size_t sample = 0; sample < num_samples; sample++)
+        for (std::size_t channel = 0; channel < num_channels; channel++)
+            input_vector[channel][sample] = input[k++];
 
-    double gain_db  = -12.0;
-    double gain_linear = std::pow(10.0, gain_db / 20.0);
+    state.process(input_vector, num_channels, num_samples, output_vector);
 
-    for (std::size_t channel = 0; channel < num_channels; channel++) {
-        for (std::size_t sample = 0; sample < num_samples; sample++) {
-            output_vector[channel][sample] =
-                input_vector[channel][sample] * gain_linear;
-        }
-    }
-
+    // Re-interleave: [channel][sample] → interleaved.
     k = 0;
-    for (std::size_t sample = 0; sample < num_samples; sample++) {
-        for (std::size_t channel = 0; channel < num_channels; channel++) {
-            output[k] = output_vector[channel][sample];
-            k++;
-        }
-    }
+    for (std::size_t sample = 0; sample < num_samples; sample++)
+        for (std::size_t channel = 0; channel < num_channels; channel++)
+            output[k++] = output_vector[channel][sample];
 }"#;
 
     let rust_file_path = rust_dir.join("rust_process_audio.rs");
