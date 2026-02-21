@@ -1,20 +1,33 @@
-use std::{fs, io};
+use crate::constants::constants::*;
 use std::fs::copy;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use crate::constants::constants::*;
+use std::{fs, io};
 
 pub(crate) fn process_and_copy_files(folder_path: &str, file_type: &str) -> io::Result<()> {
     let files = get_files_from_folder(folder_path)?;
 
     for file in files {
-        let file_path = file.to_str().unwrap();
-        let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
+        let file_path = match file.to_str() {
+            Some(p) => p,
+            None => {
+                eprintln!("Skipping file with non-UTF-8 path");
+                continue;
+            }
+        };
+        let file_name = match Path::new(file_path).file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => {
+                eprintln!("Skipping file with invalid name: {}", file_path);
+                continue;
+            }
+        };
 
-        if (file_type == "rust" && file_name == "rust_process_audio.rs") ||
-            (file_type == "cpp" && file_name == "cpp_process_audio.cpp") ||
-            (file_type == "both" && (file_name == "rust_process_audio.rs" || file_name == "cpp_process_audio.cpp")) {
-
+        if (file_type == "rust" && file_name == "rust_process_audio.rs")
+            || (file_type == "cpp" && file_name == "cpp_process_audio.cpp")
+            || (file_type == "both"
+                && (file_name == "rust_process_audio.rs" || file_name == "cpp_process_audio.cpp"))
+        {
             if validate_file(file_path)? {
                 copy_to_processing_folder(file_path)?;
             } else {
@@ -33,7 +46,7 @@ fn get_files_from_folder(folder_path: &str) -> io::Result<Vec<PathBuf>> {
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        let file_name = path.file_name().unwrap().to_str().unwrap_or("");
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if file_name == "cpp_process_audio.cpp" || file_name == "rust_process_audio.rs" {
             valid_files.push(path);
@@ -46,8 +59,7 @@ fn get_files_from_folder(folder_path: &str) -> io::Result<Vec<PathBuf>> {
 fn validate_file(file_path: &str) -> io::Result<bool> {
     let file_name = Path::new(file_path)
         .file_name()
-        .unwrap()
-        .to_str()
+        .and_then(|n| n.to_str())
         .unwrap_or("");
 
     if file_name == "cpp_process_audio.cpp" {
@@ -63,37 +75,52 @@ fn check_cpp_function_signature(file_path: &str) -> io::Result<bool> {
     let mut file = fs::File::open(file_path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
-
-    Ok(contents.contains("extern \"C\" void cpp_process(const double* input, size_t num_channels, size_t num_samples, double* output)"))
+    let normalized: String = contents.split_whitespace().collect::<Vec<_>>().join(" ");
+    Ok(normalized.contains(
+        "extern \"C\" void cpp_process ( const double * input , size_t num_channels , size_t num_samples , double * output )"
+    ))
 }
 
 fn check_rust_function_signature(file_path: &str) -> io::Result<bool> {
     let mut file = fs::File::open(file_path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
-
-    Ok(contents.contains("pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>)"))
+    let normalized: String = contents.split_whitespace().collect::<Vec<_>>().join(" ");
+    Ok(normalized.contains(
+        "pub fn rust_process ( input : & Vec < Vec < f64 > > , output : & mut Vec < Vec < f64 > > )"
+    ))
 }
 
 fn copy_to_processing_folder(file_path: &str) -> io::Result<()> {
-    let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
+    let file_name = Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Could not extract filename from path '{}'", file_path),
+            )
+        })?;
 
     let destination = if file_name == "rust_process_audio.rs" {
-        format!("{}/{}", RUST_FOLDER, file_name)
+        RUST_FOLDER.join(file_name)
     } else if file_name == "cpp_process_audio.cpp" {
-        format!("{}/{}", CPP_FOLDER, file_name)
+        CPP_FOLDER.join(file_name)
     } else {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Unknown file type"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Unknown file type",
+        ));
     };
 
     if file_name == "rust_process_audio.rs" {
-        fs::create_dir_all(RUST_FOLDER)?;
+        fs::create_dir_all(&*RUST_FOLDER)?;
     } else {
-        fs::create_dir_all(CPP_FOLDER)?;
+        fs::create_dir_all(&*CPP_FOLDER)?;
     }
 
     copy(file_path, &destination)?;
-    println!("File copied to: {}", destination);
+    println!("File copied to: {}", destination.display());
 
     Ok(())
 }

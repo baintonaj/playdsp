@@ -1,9 +1,16 @@
 [package]
 name = "playdsp"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
+rust-version = "1.85"
+description = "High-performance CLI for compiling and running Rust and C++ DSP code against audio files"
+license = "MIT"
+authors = ["Andy Bainton <baintonaj@gmail.com>"]
+repository = "https://github.com/AndyBainton/playdsp"
 
 [dependencies]
 clap = "4.5"
 rayon = "1.11"
 chrono = "0.4"
+indicatif = "0.17"
+console = "0.15"

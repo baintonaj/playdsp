@@ -64,6 +64,20 @@ cargo uninstall playdsp
 
 To update playdsp after pulling new changes:
 
+### Option A: One-step reinstall (recommended)
+
+```bash
+sudo make reinstall
+```
+
+This runs `make clean`, `make release`, and `make install` in sequence. Pass `DESTDIR` if you installed to a non-default location:
+
+```bash
+sudo make reinstall DESTDIR=/usr/local/bin
+```
+
+### Option B: Manual steps
+
 1. Rebuild the binary:
 ```bash
 cargo build --release
@@ -83,9 +97,16 @@ cargo install --path . --force
 rm -rf ../audio/.playdsp_runtime
 ```
 
+4. Verify the version:
+```bash
+playdsp --version
+```
+
 ## Requirements
 
-- **Rust toolchain**: Install from [rustup.rs](https://rustup.rs/)
+- **Rust toolchain 1.85+**: Required for edition 2024. Install from [rustup.rs](https://rustup.rs/)
+  - Check your version: `rustc --version`
+  - Update if needed: `rustup update stable`
 - **C++ compiler**: Required for C++ DSP code compilation
   - macOS: Install Xcode Command Line Tools (`xcode-select --install`)
   - Linux: Install `build-essential` (Debian/Ubuntu) or `base-devel` (Arch)
@@ -131,6 +152,10 @@ You should see the folder structure with `rust/` and `cpp/` subdirectories conta
 - Check that you're running playdsp from a directory where `../audio` can be created
 - Delete `../audio/.playdsp_runtime` and try again
 
+### "error: package `playdsp` cannot be built because it requires rustc 1.85..."
+- Run `rustup update stable` to update to the latest Rust toolchain
+- Verify with `rustc --version` that you have 1.85.0 or newer
+
 ### Version not updating after reinstall
 
 - If using cargo install, use the `--force` flag
@@ -148,9 +173,11 @@ You should see the folder structure with `rust/` and `cpp/` subdirectories conta
 - /usr/local/bin should be in PATH by default
 
 ### Windows
-- Install MSVC Build Tools or MinGW-w64
-- Add installation directory to PATH manually
-- Runtime directory will be created at `../audio/.playdsp_runtime`
+- Install MSVC Build Tools (recommended) or MinGW-w64
+- MSVC Build Tools: available from [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+- MSVC is the recommended C++ compiler on Windows — playdsp uses MSVC-specific flags (`/O2`, `/std:c++20`, `/EHsc`) when building with MSVC
+- MinGW users: ensure `g++` is in PATH and add the MinGW bin directory to PATH
+- The runtime binary is automatically detected as `playdsp_runtime.exe` on Windows
 
 ## Quick Install Script
 

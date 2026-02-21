@@ -1,10 +1,10 @@
 mod file_processing;
 
-use file_processing::code_processing::create_folders_and_copy_files::*;
-use file_processing::code_processing::process_and_copy_files::*;
-use file_processing::code_processing::get_program_files::*;
-use file_processing::audio_processing::replace_audio_files::*;
 use file_processing::audio_processing::get_audio_files_from_folder::*;
+use file_processing::audio_processing::replace_audio_files::*;
+use file_processing::code_processing::create_folders_and_copy_files::*;
+use file_processing::code_processing::get_program_files::*;
+use file_processing::code_processing::process_and_copy_files::*;
 use signal_processing::process_multiple_audio_files::*;
 mod constants;
 mod program_recompile;
@@ -12,8 +12,8 @@ mod signal_processing;
 
 use program_recompile::run_recompile::*;
 
-use constants::constants::*;
 use clap::{Arg, ArgAction, Command};
+use constants::constants::*;
 
 fn check_cpp_files_recursive(dir: &std::path::Path) -> bool {
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -35,6 +35,15 @@ fn check_cpp_files_recursive(dir: &std::path::Path) -> bool {
 }
 
 fn main() {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )
+        .build_global()
+        .ok();
+
     let matches = Command::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
         .author("Andy Bainton <baintonaj@gmail.com>")
@@ -119,16 +128,15 @@ fn main() {
         }
     }
 
-    use std::path::Path;
-    let runtime_binary = Path::new("../audio/.playdsp_runtime/target/release/playdsp_runtime");
+    let runtime_binary = std::path::PathBuf::from("../audio/.playdsp_runtime/target/release")
+        .join(format!("playdsp_runtime{}", std::env::consts::EXE_SUFFIX));
 
-    let rust_dir = Path::new(&*RUST_FOLDER);
-    let cpp_dir = Path::new(&*CPP_FOLDER);
+    let rust_dir = RUST_FOLDER.as_path();
+    let cpp_dir = CPP_FOLDER.as_path();
 
     let has_rust_files = rust_dir.exists() && rust_dir.join("rust_process_audio.rs").exists();
     let has_dependencies_toml = rust_dir.exists() && rust_dir.join("dependencies.toml").exists();
-    let has_cpp_files = cpp_dir.exists() &&
-        check_cpp_files_recursive(&cpp_dir);
+    let has_cpp_files = cpp_dir.exists() && check_cpp_files_recursive(&cpp_dir);
 
     if has_rust_files || has_cpp_files || has_dependencies_toml {
         println!("DSP code detected - recompiling runtime to ensure latest changes...");
@@ -152,27 +160,22 @@ fn main() {
     let mut cpp_files: Vec<String> = vec![];
 
     if !rust_present && !cpp_present {
-        rust_files = get_program_files(&*RUST_FOLDER, "rs");
-        cpp_files = get_program_files(&*CPP_FOLDER, "cpp");
+        rust_files = get_program_files(RUST_FOLDER.to_str().unwrap_or(""), "rs");
+        cpp_files = get_program_files(CPP_FOLDER.to_str().unwrap_or(""), "cpp");
     } else if rust_present {
-        rust_files = get_program_files(&*RUST_FOLDER, "rs");
+        rust_files = get_program_files(RUST_FOLDER.to_str().unwrap_or(""), "rs");
     } else if cpp_present {
-        cpp_files = get_program_files(&*CPP_FOLDER, "cpp");
+        cpp_files = get_program_files(CPP_FOLDER.to_str().unwrap_or(""), "cpp");
     }
 
     if !rust_present && !cpp_present {
-        println!("Rust files: {:?}", rust_files);
-        println!("C++ files: {:?}", cpp_files);
         let mut all_files = Vec::new();
         all_files.append(rust_files.as_mut());
         all_files.append(cpp_files.as_mut());
         process_multiple_audio_files(&audio_files_to_process, &all_files);
     } else if rust_present {
-        println!("Rust files: {:?}", rust_files);
         process_multiple_audio_files(&audio_files_to_process, &rust_files);
     } else if cpp_present {
-        println!("C++ files: {:?}", cpp_files);
         process_multiple_audio_files(&audio_files_to_process, &cpp_files);
     }
-
 }
