@@ -3,7 +3,7 @@ use clap::ArgMatches;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::process::{exit, Command, Stdio};
+use std::process::{Command, Stdio, exit};
 use std::time::Duration;
 use std::{fs, io};
 
@@ -111,7 +111,8 @@ fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
 
             fs::write(runtime_user_code_dir.join("mod.rs"), mod_rs_content)?;
 
-            let start_marker = "// Rust processing function - will be loaded from user's code\nfn rust_process";
+            let start_marker =
+                "// Rust processing function - will be loaded from user's code\nfn rust_process";
             let end_marker = "\n}\n\n// C++ FFI";
 
             if let Some(start_idx) = main_rs_content.find(start_marker) {
@@ -231,7 +232,11 @@ fn collect_local_modules(dir: &Path) -> HashSet<String> {
     modules
 }
 
-fn scan_rust_dependencies_recursive(dir: &Path, dependencies: &mut HashMap<String, String>, local_modules: &HashSet<String>) {
+fn scan_rust_dependencies_recursive(
+    dir: &Path,
+    dependencies: &mut HashMap<String, String>,
+    local_modules: &HashSet<String>,
+) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries {
             if let Ok(entry) = entry {
@@ -261,7 +266,11 @@ fn detect_crate_dependencies(code: &str, local_modules: &HashSet<String>) -> Vec
     for line in code.lines() {
         let line = line.trim();
 
-        if line.starts_with("use ") && !line.starts_with("use crate::") && !line.starts_with("use self::") && !line.starts_with("use super::") {
+        if line.starts_with("use ")
+            && !line.starts_with("use crate::")
+            && !line.starts_with("use self::")
+            && !line.starts_with("use super::")
+        {
             if let Some(use_content) = line.strip_prefix("use ") {
                 let crate_name = use_content
                     .split("::")
@@ -272,7 +281,8 @@ fn detect_crate_dependencies(code: &str, local_modules: &HashSet<String>) -> Vec
 
                 if !crate_name.is_empty()
                     && !std_crates.contains(&crate_name)
-                    && !local_modules.contains(crate_name) {
+                    && !local_modules.contains(crate_name)
+                {
                     if !crates.contains(&crate_name.to_string()) {
                         crates.push(crate_name.to_string());
                     }

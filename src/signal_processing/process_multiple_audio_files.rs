@@ -1,9 +1,9 @@
-use std::path::Path;
-use std::process::Command;
-use rayon::prelude::*;
+use crate::constants::constants::*;
 use chrono::Local;
 use indicatif::{ProgressBar, ProgressStyle};
-use crate::constants::constants::*;
+use rayon::prelude::*;
+use std::path::Path;
+use std::process::Command;
 
 pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths: &[String]) {
     let runtime_binary = std::path::PathBuf::from("../audio/.playdsp_runtime/target/release")
@@ -14,7 +14,8 @@ pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths
         return;
     }
 
-    let pairs: Vec<(&String, &String)> = audio_files.iter()
+    let pairs: Vec<(&String, &String)> = audio_files
+        .iter()
         .flat_map(|audio| program_paths.iter().map(move |prog| (audio, prog)))
         .collect();
 
@@ -41,21 +42,25 @@ pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths
             .unwrap_or("");
 
         if Path::new(program_path.as_str()).exists() {
-            let output_file = RESULT_FOLDER.join(
-                format!("{}_processed_{}_{}.wav", audio_stem, current_time, program_suffix)
-            );
+            let output_file = RESULT_FOLDER.join(format!(
+                "{}_processed_{}_{}.wav",
+                audio_stem, current_time, program_suffix
+            ));
 
             let mut cmd = Command::new(&runtime_binary);
             cmd.arg(audio_file.as_str())
-               .arg(&output_file)
-               .arg(program_suffix);
+                .arg(&output_file)
+                .arg(program_suffix);
 
             match cmd.status() {
                 Ok(exit_status) if exit_status.success() => {
                     pb.println(format!("  → {}", output_file.display()));
                 }
                 Ok(exit_status) => {
-                    pb.println(format!("  ✗ {}: runtime exited with {}", audio_file, exit_status));
+                    pb.println(format!(
+                        "  ✗ {}: runtime exited with {}",
+                        audio_file, exit_status
+                    ));
                 }
                 Err(e) => {
                     pb.println(format!("  ✗ runtime error: {}", e));
@@ -69,5 +74,8 @@ pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths
     });
 
     pb.finish_with_message("done");
-    println!("All files processed in {:.1}s", processing_start.elapsed().as_secs_f64());
+    println!(
+        "All files processed in {:.1}s",
+        processing_start.elapsed().as_secs_f64()
+    );
 }

@@ -3,6 +3,10 @@ name = "playdsp"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
+description = "High-performance CLI for compiling and running Rust and C++ DSP code against audio files"
+license = "MIT"
+authors = ["Andy Bainton <baintonaj@gmail.com>"]
+repository = "https://github.com/AndyBainton/playdsp"
 
 [dependencies]
 clap = "4.5"

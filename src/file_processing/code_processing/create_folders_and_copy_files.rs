@@ -1,6 +1,6 @@
+use crate::constants::constants::*;
 use std::fs::*;
 use std::path::Path;
-use crate::constants::constants::*;
 
 pub(crate) fn create_folders_and_copy_files(base_dir: &str) {
     let audio_dir = Path::new(base_dir).join(AUDIO_NAME);
@@ -10,15 +10,18 @@ pub(crate) fn create_folders_and_copy_files(base_dir: &str) {
     let result_dir = audio_dir.join(RESULT_NAME);
     let source_dir = audio_dir.join(SOURCE_NAME);
 
-    create_dir_all(&audio_dir).expect(&*("Failed to create '".to_owned() + AUDIO_NAME + "' parent directory"));
-    create_dir_all(&processing_dir).expect(&*("Failed to create '".to_owned() + PROCESSING_NAME + "' directory"));
+    create_dir_all(&audio_dir)
+        .expect(&*("Failed to create '".to_owned() + AUDIO_NAME + "' parent directory"));
+    create_dir_all(&processing_dir)
+        .expect(&*("Failed to create '".to_owned() + PROCESSING_NAME + "' directory"));
     create_dir_all(&rust_dir).expect("Failed to create 'rust' directory");
     create_dir_all(&cpp_dir).expect("Failed to create 'cpp' directory");
-    create_dir_all(&result_dir).expect(&*("Failed to create '".to_owned() + RESULT_NAME + "' directory"));
-    create_dir_all(&source_dir).expect(&*("Failed to create '".to_owned() + SOURCE_NAME + "' directory"));
+    create_dir_all(&result_dir)
+        .expect(&*("Failed to create '".to_owned() + RESULT_NAME + "' directory"));
+    create_dir_all(&source_dir)
+        .expect(&*("Failed to create '".to_owned() + SOURCE_NAME + "' directory"));
 
-    let rust_file_content =
-r#"// ============================================================================
+    let rust_file_content = r#"// ============================================================================
 // rust_process_audio.rs — PlayDSP Rust DSP entry point
 // ============================================================================
 //
@@ -73,8 +76,7 @@ pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
     STATE.lock().unwrap().process(input, output);
 }"#;
 
-    let cpp_file_content =
-r#"// ============================================================================
+    let cpp_file_content = r#"// ============================================================================
 // cpp_process_audio.cpp — PlayDSP C++ DSP entry point
 // ============================================================================
 //

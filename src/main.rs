@@ -1,10 +1,10 @@
 mod file_processing;
 
-use file_processing::code_processing::create_folders_and_copy_files::*;
-use file_processing::code_processing::process_and_copy_files::*;
-use file_processing::code_processing::get_program_files::*;
-use file_processing::audio_processing::replace_audio_files::*;
 use file_processing::audio_processing::get_audio_files_from_folder::*;
+use file_processing::audio_processing::replace_audio_files::*;
+use file_processing::code_processing::create_folders_and_copy_files::*;
+use file_processing::code_processing::get_program_files::*;
+use file_processing::code_processing::process_and_copy_files::*;
 use signal_processing::process_multiple_audio_files::*;
 mod constants;
 mod program_recompile;
@@ -12,8 +12,8 @@ mod signal_processing;
 
 use program_recompile::run_recompile::*;
 
-use constants::constants::*;
 use clap::{Arg, ArgAction, Command};
+use constants::constants::*;
 
 fn check_cpp_files_recursive(dir: &std::path::Path) -> bool {
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -36,7 +36,11 @@ fn check_cpp_files_recursive(dir: &std::path::Path) -> bool {
 
 fn main() {
     rayon::ThreadPoolBuilder::new()
-        .num_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4))
+        .num_threads(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )
         .build_global()
         .ok();
 
@@ -132,8 +136,7 @@ fn main() {
 
     let has_rust_files = rust_dir.exists() && rust_dir.join("rust_process_audio.rs").exists();
     let has_dependencies_toml = rust_dir.exists() && rust_dir.join("dependencies.toml").exists();
-    let has_cpp_files = cpp_dir.exists() &&
-        check_cpp_files_recursive(&cpp_dir);
+    let has_cpp_files = cpp_dir.exists() && check_cpp_files_recursive(&cpp_dir);
 
     if has_rust_files || has_cpp_files || has_dependencies_toml {
         println!("DSP code detected - recompiling runtime to ensure latest changes...");
@@ -175,5 +178,4 @@ fn main() {
     } else if cpp_present {
         process_multiple_audio_files(&audio_files_to_process, &cpp_files);
     }
-
 }

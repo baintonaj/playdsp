@@ -1,8 +1,8 @@
-use std::{fs, io};
+use crate::constants::constants::*;
 use std::fs::copy;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use crate::constants::constants::*;
+use std::{fs, io};
 
 pub(crate) fn process_and_copy_files(folder_path: &str, file_type: &str) -> io::Result<()> {
     let files = get_files_from_folder(folder_path)?;
@@ -23,10 +23,11 @@ pub(crate) fn process_and_copy_files(folder_path: &str, file_type: &str) -> io::
             }
         };
 
-        if (file_type == "rust" && file_name == "rust_process_audio.rs") ||
-            (file_type == "cpp" && file_name == "cpp_process_audio.cpp") ||
-            (file_type == "both" && (file_name == "rust_process_audio.rs" || file_name == "cpp_process_audio.cpp")) {
-
+        if (file_type == "rust" && file_name == "rust_process_audio.rs")
+            || (file_type == "cpp" && file_name == "cpp_process_audio.cpp")
+            || (file_type == "both"
+                && (file_name == "rust_process_audio.rs" || file_name == "cpp_process_audio.cpp"))
+        {
             if validate_file(file_path)? {
                 copy_to_processing_folder(file_path)?;
             } else {
@@ -45,7 +46,7 @@ fn get_files_from_folder(folder_path: &str) -> io::Result<Vec<PathBuf>> {
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        let file_name = path.file_name().unwrap().to_str().unwrap_or("");
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if file_name == "cpp_process_audio.cpp" || file_name == "rust_process_audio.rs" {
             valid_files.push(path);
@@ -58,8 +59,7 @@ fn get_files_from_folder(folder_path: &str) -> io::Result<Vec<PathBuf>> {
 fn validate_file(file_path: &str) -> io::Result<bool> {
     let file_name = Path::new(file_path)
         .file_name()
-        .unwrap()
-        .to_str()
+        .and_then(|n| n.to_str())
         .unwrap_or("");
 
     if file_name == "cpp_process_audio.cpp" {
@@ -92,14 +92,25 @@ fn check_rust_function_signature(file_path: &str) -> io::Result<bool> {
 }
 
 fn copy_to_processing_folder(file_path: &str) -> io::Result<()> {
-    let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
+    let file_name = Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Could not extract filename from path '{}'", file_path),
+            )
+        })?;
 
     let destination = if file_name == "rust_process_audio.rs" {
         RUST_FOLDER.join(file_name)
     } else if file_name == "cpp_process_audio.cpp" {
         CPP_FOLDER.join(file_name)
     } else {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Unknown file type"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Unknown file type",
+        ));
     };
 
     if file_name == "rust_process_audio.rs" {
