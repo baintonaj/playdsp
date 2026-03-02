@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use std::path::Path;
 use std::process::Command;
 
-pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths: &[String]) {
+pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths: &[String], preserve_meta: bool) {
     let runtime_binary = std::path::PathBuf::from("../audio/.playdsp_runtime/target/release")
         .join(format!("playdsp_runtime{}", std::env::consts::EXE_SUFFIX));
 
@@ -51,6 +51,9 @@ pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths
             cmd.arg(audio_file.as_str())
                 .arg(&output_file)
                 .arg(program_suffix);
+            if preserve_meta {
+                cmd.arg("--meta");
+            }
 
             match cmd.status() {
                 Ok(exit_status) if exit_status.success() => {

@@ -21,6 +21,7 @@ High-performance tool that compiles and executes Rust and/or C++ DSP code agains
 - **Persistent state objects**: Create classes/structs that maintain state across buffer calls
 - **Parallel processing**: Processes multiple audio files concurrently using Rayon
 - **Portable**: No installation of source files required - main binary is self-contained
+- **BWF metadata passthrough**: Optional `--meta` flag preserves the `bext` chunk (description, originator, UMID, loudness metadata, timecode) from input files in the output — essential for Pro Tools and other pro audio applications
 - **Format support**: 16-bit, 24-bit, 32-bit integer PCM and 32-bit float WAV files
 - **Fixed buffer size**: 1024 samples per buffer for all sample rates
 - **Automatic reverb tail capture**: Every run pads audio with 1s of silence before and up to 12s after; output is trimmed at -144 dBFS so reverb/delay tails are always fully captured
@@ -244,12 +245,13 @@ playdsp [OPTIONS] [SUBCOMMAND]
 
 ### Options
 
-- `-r`, `--rust`      Process with Rust code only
-- `-c`, `--cpp`       Process with C++ code only
-- `-d`, `--code <DIR>` Use code from specified directory (copies to `audio/processing/rust/` or `audio/processing/cpp/`)
+- `-r`, `--rust`        Process with Rust code only
+- `-c`, `--cpp`         Process with C++ code only
+- `-m`, `--meta`        Preserve BWF metadata (`bext` chunk) from input WAV files in output
+- `-d`, `--code <DIR>`  Use code from specified directory (copies to `audio/processing/rust/` or `audio/processing/cpp/`)
 - `-a`, `--audio <DIR>` Use audio from specified directory (copies to `audio/source/`)
-- `-h`, `--help`      Print help
-- `-V`, `--version`   Print version
+- `-h`, `--help`        Print help
+- `-V`, `--version`     Print version
 
 ### Subcommands
 
@@ -268,6 +270,8 @@ Process audio files:
 playdsp
 playdsp --rust
 playdsp --cpp
+playdsp --meta           # preserve BWF bext chunk in output files
+playdsp --rust --meta
 ```
 
 Import code and audio:
@@ -381,6 +385,7 @@ The static `input_vector` and `output_vector` in `cpp_process()` are reused ever
 - **Input Audio Formats**: 16/24/32-bit integer PCM, 32-bit float WAV (bwavfile handles conversion)
 - **Processing Format**: All audio automatically converted to 64-bit float (-1.0 to 1.0)
 - **Output Format**: 32-bit float WAV (IEEE 754)
+- **BWF Metadata**: `bext` chunk (originator, description, UMID, loudness tags, timecode) read on every run; written to output only when `--meta` is passed
 - **Parallelism**: Rayon for concurrent file processing
 - **Buffer Size**: Fixed at 1024 samples per buffer
 - **8-bit audio**: Not supported
@@ -401,6 +406,13 @@ The tool provides clear error messages for:
 - Cargo (included with Rust)
 
 ## Version History
+
+### v0.3.1 (March 2026)
+
+**Audio**
+- **BWF metadata passthrough** (`--meta` / `-m`): when passed, the `bext` chunk is read from each input WAV file and written to the corresponding output file unchanged. Preserves originator, description, UMID, timecode reference, and EBU R128 loudness tags — essential for round-tripping files through Pro Tools and other BWF-aware DAWs. Without the flag (default) no metadata is copied, matching previous behaviour.
+
+---
 
 ### v0.3.0 (February 2026)
 

@@ -1,26 +1,27 @@
 use std::env;
-use bwavfile::{WaveFmt, WaveReader, WaveWriter};
+use bwavfile::{Bext, WaveFmt, WaveReader, WaveWriter};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 4 {
-        eprintln!("Usage: playdsp_runtime <input.wav> <output.wav> <rs|cpp>");
+        eprintln!("Usage: playdsp_runtime <input.wav> <output.wav> <rs|cpp> [--meta]");
         std::process::exit(1);
     }
 
     let input_path = &args[1];
     let output_path = &args[2];
     let mode = &args[3];
+    let preserve_meta = args.get(4).map(|a| a == "--meta").unwrap_or(false);
 
-    if let Err(e) = process_audio(input_path, output_path, mode) {
+    if let Err(e) = process_audio(input_path, output_path, mode, preserve_meta) {
         eprintln!("Error processing audio: {}", e);
         std::process::exit(1);
     }
 }
 
-fn process_audio(input_path: &str, output_path: &str, mode: &str) -> Result<(), String> {
-    let (header, mut samples_f64): (WaveFmt, Vec<Vec<f64>>) = read_wav(input_path)?;
+fn process_audio(input_path: &str, output_path: &str, mode: &str, preserve_meta: bool) -> Result<(), String> {
+    let (header, bext, mut samples_f64): (WaveFmt, Option<Bext>, Vec<Vec<f64>>) = read_wav(input_path)?;
 
     let sample_rate = header.sample_rate as usize;
     let num_channels = samples_f64.len();
@@ -88,7 +89,8 @@ fn process_audio(input_path: &str, output_path: &str, mode: &str) -> Result<(), 
         })
         .collect();
 
-    if let Err(err) = write_wav(&output_path, &processed_samples, header) {
+    let bext_to_write = if preserve_meta { bext } else { None };
+    if let Err(err) = write_wav(&output_path, &processed_samples, header, bext_to_write) {
         return Err(format!("Error writing WAV file: {}", err));
     }
 
@@ -141,9 +143,10 @@ fn convert_f64_to_f32(input: &[f64], output: &mut [f32]) {
     }
 }
 
-fn read_wav(input_file_name: &str) -> Result<(WaveFmt, Vec<Vec<f64>>), String> {
+fn read_wav(input_file_name: &str) -> Result<(WaveFmt, Option<Bext>, Vec<Vec<f64>>), String> {
     let mut r = WaveReader::open(input_file_name).map_err(|e| format!("Error opening WAV file: {}", e))?;
     let input_format = r.format().map_err(|e| format!("Error reading format: {}", e))?;
+    let bext = r.broadcast_extension().map_err(|e| format!("Error reading BWF metadata: {}", e))?;
     let input_sample_count = r.frame_length().map_err(|e| format!("Error reading frame length: {}", e))? as usize;
     let input_channel_count = input_format.channel_count as usize;
     let mut frame_reader = r.audio_frame_reader().map_err(|e| format!("Error reading audio frames: {}", e))?;
@@ -167,10 +170,10 @@ fn read_wav(input_file_name: &str) -> Result<(WaveFmt, Vec<Vec<f64>>), String> {
         }
     }
 
-    Ok((input_format, result))
+    Ok((input_format, bext, result))
 }
 
-fn write_wav(output_path: &str, processed_samples: &Vec<Vec<f32>>, header: WaveFmt) -> Result<(), String> {
+fn write_wav(output_path: &str, processed_samples: &Vec<Vec<f32>>, header: WaveFmt, bext: Option<Bext>) -> Result<(), String> {
     const BITS_PER_SAMPLE_FOR_F32: u16 = 32;
     let output_format = WaveFmt {
         tag: bwavfile::WAVE_TAG_FLOAT,
@@ -186,7 +189,11 @@ fn write_wav(output_path: &str, processed_samples: &Vec<Vec<f32>>, header: WaveF
         .flat_map(|j| processed_samples.iter().map(move |row| row[j]))
         .collect();
 
-    let w = WaveWriter::create(output_path, output_format).map_err(|e| e.to_string())?;
+    let mut w = WaveWriter::create(output_path, output_format).map_err(|e| e.to_string())?;
+    if let Some(bext_data) = bext {
+        let bext_arr = [bext_data];
+        w.write_broadcast_metadata(&bext_arr).map_err(|e| e.to_string())?;
+    }
     let mut frame_writer = w.audio_frame_writer().map_err(|e| e.to_string())?;
 
     frame_writer.write_frames::<f32>(values_vec.as_slice()).map_err(|e| e.to_string())?;

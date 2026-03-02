@@ -14,6 +14,8 @@ cargo run -- --rust            # Run with Rust only
 cargo run -- --cpp             # Run with C++ only
 cargo run -- -d <dir>          # Import code from external directory
 cargo run -- -a <dir>          # Import audio from external directory
+cargo run -- --meta            # Preserve BWF bext chunk in output files
+cargo run -- --rust --meta     # Rust only, with BWF metadata passthrough
 ```
 
 Or via the Makefile:
@@ -37,7 +39,7 @@ PlayDSP is a CLI tool that compiles and executes user-written Rust and/or C++ DS
 
 ### Execution Flow
 
-1. **CLI parsing** (`src/main.rs`) — clap-based argument parsing with `new` subcommand and `-r`/`-c`/`-d`/`-a` flags. Initialises a Rayon thread pool via `ThreadPoolBuilder` at startup.
+1. **CLI parsing** (`src/main.rs`) — clap-based argument parsing with `new` subcommand and `-r`/`-c`/`-d`/`-a`/`-m` flags. Initialises a Rayon thread pool via `ThreadPoolBuilder` at startup.
 2. **File management** (`src/file_processing/`) — copies user code and audio files to standard locations under `../audio/`
 3. **Runtime compilation** (`src/program_recompile/run_recompile.rs`) — the core orchestration:
    - Creates `.playdsp_runtime/` project from embedded templates (`templates/`)
@@ -46,7 +48,7 @@ PlayDSP is a CLI tool that compiles and executes user-written Rust and/or C++ DS
    - Copies user Rust code as a `user_code` module and patches `main.rs` to delegate to it
    - Compiles C++ via the `cc` crate (C++20, `-O3` on GCC/Clang; `/O2`+`/EHsc` on MSVC)
    - Runs `cargo build --release` with stdout suppressed and stderr piped; `indicatif` spinner animates during compilation; stderr is surfaced only on failure; elapsed time printed on success
-4. **Parallel processing** (`src/signal_processing/`) — uses Rayon to invoke the runtime binary concurrently across all `(audio_file, program_path)` pairs via a single flattened `par_iter`. Per-file results are printed above the bar via `pb.println()` (thread-safe); progress bar tracks total pair count with elapsed time.
+4. **Parallel processing** (`src/signal_processing/`) — uses Rayon to invoke the runtime binary concurrently across all `(audio_file, program_path)` pairs via a single flattened `par_iter`. Per-file results are printed above the bar via `pb.println()` (thread-safe); progress bar tracks total pair count with elapsed time. When `--meta` is set, `--meta` is appended to each runtime invocation.
 
 ### Key Directory Layout (runtime, relative to execution dir)
 
@@ -66,7 +68,7 @@ All paths are defined as `static LazyLock<PathBuf>` in `src/constants/constants.
 
 Three templates in `templates/` are embedded at compile time via `include_str!` in `run_recompile.rs`:
 - `Cargo.toml.template` — runtime manifest; user dependencies are injected after `[dependencies]`. Includes `[profile.release]` with `lto = true` and `codegen-units = 1`.
-- `main.rs.template` — runtime entry point with WAV I/O (bwavfile), Rust/C++ dispatch, buffer processing (1024-sample chunks), AVX SIMD f64→f32 conversion, post-FFI NaN/Inf validation, and reverb tail padding logic. Contains marker comments that get patched to wire in user code.
+- `main.rs.template` — runtime entry point with WAV I/O (bwavfile), Rust/C++ dispatch, buffer processing (1024-sample chunks), AVX SIMD f64→f32 conversion, post-FFI NaN/Inf validation, reverb tail padding logic, and optional BWF `bext` metadata passthrough. Contains marker comments that get patched to wire in user code.
 - `build.rs.template` — recursively finds and compiles C++ files with `cc`. Uses platform-conditional flags: `-O3`/`-std=c++20` on GCC/Clang, `/O2`/`/std:c++20`/`/EHsc` on MSVC, `-fPIC` added on Linux.
 
 ### Dependency Detection
@@ -83,6 +85,7 @@ Three templates in `templates/` are embedded at compile time via `include_str!` 
 - Audio normalised to f64 `[-1.0, 1.0]` for processing
 - C++ FFI uses `extern "C"` with flattened interleaved buffers; output validated for NaN/Inf after each call
 - f64→f32 conversion uses AVX intrinsics (`_mm256_cvtpd_ps`) with `is_x86_feature_detected!` runtime guard and scalar fallback
+- BWF metadata (`bext` chunk) is always read from input via `WaveReader::broadcast_extension()`; written to output via `WaveWriter::write_broadcast_metadata()` only when the `--meta` / `-m` flag is passed. Without the flag the `bext` chunk is discarded (default behaviour). `write_broadcast_metadata` must be called before `audio_frame_writer()` — the template enforces this ordering.
 
 ### Reverb Tail Capture (always-on)
 

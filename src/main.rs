@@ -89,6 +89,13 @@ fn main() {
             .required(false)
             .num_args(1)
             .action(ArgAction::Set))
+        .arg(Arg::new("meta")
+            .short('m')
+            .long("meta")
+            .required(false)
+            .num_args(0)
+            .action(ArgAction::SetTrue)
+            .help("Preserve BWF metadata (bext chunk) from input WAV files in output"))
         .get_matches();
 
     if let Some(sub_matches) = matches.subcommand_matches("new") {
@@ -100,6 +107,7 @@ fn main() {
 
     let rust_present = matches.contains_id("rust");
     let cpp_present = matches.contains_id("cpp");
+    let preserve_meta = matches.get_flag("meta");
 
     if let Some(folder_path) = matches.get_one::<String>(CODE_FILE_PATH_NAME) {
         if rust_present && !cpp_present {
@@ -172,10 +180,10 @@ fn main() {
         let mut all_files = Vec::new();
         all_files.append(rust_files.as_mut());
         all_files.append(cpp_files.as_mut());
-        process_multiple_audio_files(&audio_files_to_process, &all_files);
+        process_multiple_audio_files(&audio_files_to_process, &all_files, preserve_meta);
     } else if rust_present {
-        process_multiple_audio_files(&audio_files_to_process, &rust_files);
+        process_multiple_audio_files(&audio_files_to_process, &rust_files, preserve_meta);
     } else if cpp_present {
-        process_multiple_audio_files(&audio_files_to_process, &cpp_files);
+        process_multiple_audio_files(&audio_files_to_process, &cpp_files, preserve_meta);
     }
 }
