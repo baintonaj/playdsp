@@ -26,3 +26,9 @@ pub(crate) static SOURCE_FOLDER: LazyLock<PathBuf> =
     LazyLock::new(|| PathBuf::from("..").join("audio").join("source"));
 pub(crate) static RESULT_FOLDER: LazyLock<PathBuf> =
     LazyLock::new(|| PathBuf::from("..").join("audio").join("result"));
+pub(crate) static TESTS_FOLDER: LazyLock<PathBuf> = LazyLock::new(|| {
+    PathBuf::from("..")
+        .join("audio")
+        .join("processing")
+        .join("tests")
+});

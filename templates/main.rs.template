@@ -191,8 +191,7 @@ fn write_wav(output_path: &str, processed_samples: &Vec<Vec<f32>>, header: WaveF
 
     let mut w = WaveWriter::create(output_path, output_format).map_err(|e| e.to_string())?;
     if let Some(bext_data) = bext {
-        let bext_arr = [bext_data];
-        w.write_broadcast_metadata(&bext_arr).map_err(|e| e.to_string())?;
+        w.write_broadcast_metadata(&bext_data).map_err(|e| e.to_string())?;
     }
     let mut frame_writer = w.audio_frame_writer().map_err(|e| e.to_string())?;
 

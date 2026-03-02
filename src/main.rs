@@ -11,6 +11,7 @@ mod program_recompile;
 mod signal_processing;
 
 use program_recompile::run_recompile::*;
+use program_recompile::run_tests::*;
 
 use clap::{Arg, ArgAction, Command};
 use constants::constants::*;
@@ -61,6 +62,24 @@ fn main() {
                         .action(ArgAction::Set)
                 )
         )
+        .subcommand(
+            Command::new("test")
+                .about("Compile and run DSP tests from audio/processing/tests/")
+                .arg(Arg::new("rust")
+                    .short('r')
+                    .long("rust")
+                    .required(false)
+                    .num_args(0)
+                    .action(ArgAction::SetTrue)
+                    .help("Run only Rust DSP tests (files not prefixed with cpp_)"))
+                .arg(Arg::new("cpp")
+                    .short('c')
+                    .long("cpp")
+                    .required(false)
+                    .num_args(0)
+                    .action(ArgAction::SetTrue)
+                    .help("Run only C++ DSP tests (files prefixed with cpp_)"))
+        )
         .arg(Arg::new("rust")
             .short('r')
             .long("rust")
@@ -102,6 +121,13 @@ fn main() {
         let dot = &".".to_string();
         let base_dir = sub_matches.get_one::<String>("dir").unwrap_or(dot);
         create_folders_and_copy_files(base_dir);
+        return;
+    }
+
+    if let Some(test_matches) = matches.subcommand_matches("test") {
+        let rust_only = test_matches.get_flag("rust");
+        let cpp_only = test_matches.get_flag("cpp");
+        run_tests(rust_only, cpp_only);
         return;
     }
 

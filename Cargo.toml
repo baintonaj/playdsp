@@ -1,6 +1,6 @@
 [package]
 name = "playdsp"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.85"
 description = "High-performance CLI for compiling and running Rust and C++ DSP code against audio files"
