@@ -57,7 +57,7 @@ pub(crate) fn run_recompile(_matches: &ArgMatches) {
     println!("Compiled in {:.1}s", compile_start.elapsed().as_secs_f64());
 }
 
-fn setup_runtime_project(runtime_dir: &Path, processing_dir: &Path) -> io::Result<()> {
+pub(crate) fn setup_runtime_project(runtime_dir: &Path, processing_dir: &Path) -> io::Result<()> {
     fs::create_dir_all(runtime_dir)?;
     fs::create_dir_all(runtime_dir.join("src"))?;
 
@@ -71,7 +71,7 @@ fn setup_runtime_project(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
     Ok(())
 }
 
-fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Result<()> {
+pub(crate) fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Result<()> {
     let main_rs_path = runtime_dir.join("src/main.rs");
     let mut main_rs_content = fs::read_to_string(&main_rs_path)?;
     let rust_dir = processing_dir.join("rust");
@@ -86,8 +86,8 @@ fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
         copy_dir_recursive(&rust_dir, &runtime_user_code_dir)?;
 
         if rust_process_file.exists() {
-            // Create a mod.rs file in user_code directory to make it a proper module
-            // Dynamically detect all .rs files and create module declarations
+            // Create a mod.rs file in user_code directory to make it a proper module.
+            // Dynamically detect all .rs files and create pub module declarations.
             let mut mod_declarations = Vec::new();
 
             if let Ok(entries) = fs::read_dir(&runtime_user_code_dir) {
@@ -105,7 +105,7 @@ fn inject_user_rust_code(runtime_dir: &Path, processing_dir: &Path) -> io::Resul
                 }
             }
 
-            mod_declarations.sort(); // Ensure consistent ordering
+            mod_declarations.sort();
             let mut mod_rs_content = mod_declarations.join("\n");
             mod_rs_content.push_str("\n\npub use rust_process_audio::rust_process;\n");
 

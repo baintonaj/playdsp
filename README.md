@@ -20,7 +20,9 @@ High-performance tool that compiles and executes Rust and/or C++ DSP code agains
 - **Multi-file projects**: Full support for complex Rust modules and C++20 with nested subdirectories
 - **Persistent state objects**: Create classes/structs that maintain state across buffer calls
 - **Parallel processing**: Processes multiple audio files concurrently using Rayon
+- **DSP unit testing**: `playdsp test` compiles and runs standard Rust `#[test]` functions against your DSP code without needing audio files; tests Rust and C++ in parallel
 - **Portable**: No installation of source files required - main binary is self-contained
+- **BWF metadata passthrough**: Optional `--meta` flag preserves the `bext` chunk (description, originator, UMID, loudness metadata, timecode) from input files in the output — essential for Pro Tools and other pro audio applications
 - **Format support**: 16-bit, 24-bit, 32-bit integer PCM and 32-bit float WAV files
 - **Fixed buffer size**: 1024 samples per buffer for all sample rates
 - **Automatic reverb tail capture**: Every run pads audio with 1s of silence before and up to 12s after; output is trimmed at -144 dBFS so reverb/delay tails are always fully captured
@@ -53,8 +55,11 @@ audio/
 ├── processing/                    # DSP code root
 │   ├── rust/                      # Rust DSP code (with subdirectories)
 │   │   └── rust_process_audio.rs  # Rust entry point
-│   └── cpp/                       # C++ DSP code (with subdirectories)
-│       └── cpp_process_audio.cpp  # C++ entry point
+│   ├── cpp/                       # C++ DSP code (with subdirectories)
+│   │   └── cpp_process_audio.cpp  # C++ entry point
+│   └── tests/                     # DSP unit tests (run via playdsp test)
+│       ├── rust_tests.rs          # Rust DSP tests
+│       └── cpp_tests.rs           # C++ DSP tests
 └── result/                        # Processed audio output
 ```
 
@@ -216,7 +221,37 @@ rustfft = { version = "6.0", features = ["avx"] }
 
 See [DEPENDENCIES.md](DEPENDENCIES.md) for full documentation on dependency management.
 
-### 3. Add Audio Files
+### 3. Test Your DSP Code
+
+```bash
+playdsp test          # run all tests (Rust + C++ in parallel)
+playdsp test --rust   # run only Rust tests
+playdsp test --cpp    # run only C++ tests
+```
+
+The starter files `rust_tests.rs` and `cpp_tests.rs` are ready to run immediately. They verify the default −12 dB gain behaviour, check that silence in produces silence out, and assert that buffer dimensions are preserved.
+
+**Output example:**
+```
+DSP code detected - recompiling for test...
+   Compiling playdsp_runtime v0.4.0
+
+running 6 tests
+test user_code::cpp_tests::test_cpp_buffer_dimensions_preserved ... ok
+test user_code::cpp_tests::test_cpp_gain_minus_12db ... ok
+test user_code::cpp_tests::test_cpp_silence_in_silence_out ... ok
+test user_code::rust_tests::test_buffer_dimensions_preserved ... ok
+test user_code::rust_tests::test_gain_minus_12db ... ok
+test user_code::rust_tests::test_silence_in_silence_out ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored
+```
+
+Tests call `rust_process()` / `crate::cpp_process_audio_wrapper()` directly with synthetic buffers — no audio files needed. Add your own `#[test]` functions to either file, or create new `.rs` files in `tests/`. Files prefixed with `cpp_` are treated as C++ tests; all others are Rust tests.
+
+**Note on state**: the Rust `State` and C++ statics are global singletons. For stateless DSP (gain, EQ) tests are fully independent. For stateful DSP (filters, delays) call the process function a few times first to flush transient state, or reset `State` fields manually between tests.
+
+### 4. Add Audio Files
 
 Place `.wav` files in `audio/source/`
 
@@ -244,16 +279,18 @@ playdsp [OPTIONS] [SUBCOMMAND]
 
 ### Options
 
-- `-r`, `--rust`      Process with Rust code only
-- `-c`, `--cpp`       Process with C++ code only
-- `-d`, `--code <DIR>` Use code from specified directory (copies to `audio/processing/rust/` or `audio/processing/cpp/`)
+- `-r`, `--rust`        Process with Rust code only
+- `-c`, `--cpp`         Process with C++ code only
+- `-m`, `--meta`        Preserve BWF metadata (`bext` chunk) from input WAV files in output
+- `-d`, `--code <DIR>`  Use code from specified directory (copies to `audio/processing/rust/` or `audio/processing/cpp/`)
 - `-a`, `--audio <DIR>` Use audio from specified directory (copies to `audio/source/`)
-- `-h`, `--help`      Print help
-- `-V`, `--version`   Print version
+- `-h`, `--help`        Print help
+- `-V`, `--version`     Print version
 
 ### Subcommands
 
-- `new [--dir <DIR>]` Create folder structure for DSP processing
+- `new [--dir <DIR>]`            Create folder structure for DSP processing
+- `test [-r|--rust] [-c|--cpp]`  Compile and run DSP tests from `audio/processing/tests/`
 
 ### Examples
 
@@ -263,11 +300,20 @@ playdsp new
 playdsp new --dir /path/to/project
 ```
 
+Run DSP tests:
+```bash
+playdsp test             # run all tests (Rust + C++ in parallel)
+playdsp test --rust      # run only Rust tests
+playdsp test --cpp       # run only C++ tests
+```
+
 Process audio files:
 ```bash
 playdsp
 playdsp --rust
 playdsp --cpp
+playdsp --meta           # preserve BWF bext chunk in output files
+playdsp --rust --meta
 ```
 
 Import code and audio:
@@ -381,6 +427,7 @@ The static `input_vector` and `output_vector` in `cpp_process()` are reused ever
 - **Input Audio Formats**: 16/24/32-bit integer PCM, 32-bit float WAV (bwavfile handles conversion)
 - **Processing Format**: All audio automatically converted to 64-bit float (-1.0 to 1.0)
 - **Output Format**: 32-bit float WAV (IEEE 754)
+- **BWF Metadata**: `bext` chunk (originator, description, UMID, loudness tags, timecode) read on every run; written to output only when `--meta` is passed
 - **Parallelism**: Rayon for concurrent file processing
 - **Buffer Size**: Fixed at 1024 samples per buffer
 - **8-bit audio**: Not supported
@@ -401,6 +448,28 @@ The tool provides clear error messages for:
 - Cargo (included with Rust)
 
 ## Version History
+
+### v0.4.0 (March 2026)
+
+**DSP unit testing**
+- **`playdsp test` subcommand**: recompiles the runtime in test mode and runs standard Rust `#[test]` functions. Full `cargo test` output is shown — panics, assertion failures, and line numbers are all visible.
+- **`--rust` / `--cpp` flags on `test`**: `playdsp test --rust` runs only Rust tests; `playdsp test --cpp` runs only C++ tests; default runs both in parallel (cargo test is multi-threaded).
+- **Starter test files**: `playdsp new` now writes `processing/tests/rust_tests.rs` and `processing/tests/cpp_tests.rs` with three ready-to-run tests each — verifying the default −12 dB gain, silence-in/silence-out, and buffer dimension preservation.
+- **C++ tests via safe wrapper**: C++ test files call `crate::cpp_process_audio_wrapper()` directly, the same safe interleave/deinterleave wrapper used during audio file processing — no raw pointer arithmetic in test code.
+- **File naming convention**: files in `tests/` prefixed with `cpp_` are treated as C++ tests; all others are Rust tests. This drives `--rust`/`--cpp` filtering.
+- **Clean separation**: test files are injected only during `playdsp test`, not during normal audio processing builds.
+
+**Project structure**
+- `playdsp new` creates `audio/processing/tests/` alongside `rust/` and `cpp/`.
+
+---
+
+### v0.3.1 (March 2026)
+
+**Audio**
+- **BWF metadata passthrough** (`--meta` / `-m`): when passed, the `bext` chunk is read from each input WAV file and written to the corresponding output file unchanged. Preserves originator, description, UMID, timecode reference, and EBU R128 loudness tags — essential for round-tripping files through Pro Tools and other BWF-aware DAWs. Without the flag (default) no metadata is copied, matching previous behaviour.
+
+---
 
 ### v0.3.0 (February 2026)
 

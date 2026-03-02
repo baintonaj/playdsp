@@ -11,6 +11,7 @@ mod program_recompile;
 mod signal_processing;
 
 use program_recompile::run_recompile::*;
+use program_recompile::run_tests::*;
 
 use clap::{Arg, ArgAction, Command};
 use constants::constants::*;
@@ -61,6 +62,24 @@ fn main() {
                         .action(ArgAction::Set)
                 )
         )
+        .subcommand(
+            Command::new("test")
+                .about("Compile and run DSP tests from audio/processing/tests/")
+                .arg(Arg::new("rust")
+                    .short('r')
+                    .long("rust")
+                    .required(false)
+                    .num_args(0)
+                    .action(ArgAction::SetTrue)
+                    .help("Run only Rust DSP tests (files not prefixed with cpp_)"))
+                .arg(Arg::new("cpp")
+                    .short('c')
+                    .long("cpp")
+                    .required(false)
+                    .num_args(0)
+                    .action(ArgAction::SetTrue)
+                    .help("Run only C++ DSP tests (files prefixed with cpp_)"))
+        )
         .arg(Arg::new("rust")
             .short('r')
             .long("rust")
@@ -89,6 +108,13 @@ fn main() {
             .required(false)
             .num_args(1)
             .action(ArgAction::Set))
+        .arg(Arg::new("meta")
+            .short('m')
+            .long("meta")
+            .required(false)
+            .num_args(0)
+            .action(ArgAction::SetTrue)
+            .help("Preserve BWF metadata (bext chunk) from input WAV files in output"))
         .get_matches();
 
     if let Some(sub_matches) = matches.subcommand_matches("new") {
@@ -98,8 +124,16 @@ fn main() {
         return;
     }
 
+    if let Some(test_matches) = matches.subcommand_matches("test") {
+        let rust_only = test_matches.get_flag("rust");
+        let cpp_only = test_matches.get_flag("cpp");
+        run_tests(rust_only, cpp_only);
+        return;
+    }
+
     let rust_present = matches.contains_id("rust");
     let cpp_present = matches.contains_id("cpp");
+    let preserve_meta = matches.get_flag("meta");
 
     if let Some(folder_path) = matches.get_one::<String>(CODE_FILE_PATH_NAME) {
         if rust_present && !cpp_present {
@@ -172,10 +206,10 @@ fn main() {
         let mut all_files = Vec::new();
         all_files.append(rust_files.as_mut());
         all_files.append(cpp_files.as_mut());
-        process_multiple_audio_files(&audio_files_to_process, &all_files);
+        process_multiple_audio_files(&audio_files_to_process, &all_files, preserve_meta);
     } else if rust_present {
-        process_multiple_audio_files(&audio_files_to_process, &rust_files);
+        process_multiple_audio_files(&audio_files_to_process, &rust_files, preserve_meta);
     } else if cpp_present {
-        process_multiple_audio_files(&audio_files_to_process, &cpp_files);
+        process_multiple_audio_files(&audio_files_to_process, &cpp_files, preserve_meta);
     }
 }

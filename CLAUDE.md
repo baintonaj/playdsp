@@ -14,6 +14,11 @@ cargo run -- --rust            # Run with Rust only
 cargo run -- --cpp             # Run with C++ only
 cargo run -- -d <dir>          # Import code from external directory
 cargo run -- -a <dir>          # Import audio from external directory
+cargo run -- --meta            # Preserve BWF bext chunk in output files
+cargo run -- --rust --meta     # Rust only, with BWF metadata passthrough
+cargo run -- test              # Compile and run all DSP tests (Rust + C++ in parallel)
+cargo run -- test --rust       # Run only Rust DSP tests
+cargo run -- test --cpp        # Run only C++ DSP tests
 ```
 
 Or via the Makefile:
@@ -29,7 +34,7 @@ sudo make uninstall            # Remove installed binary
 make help                      # Show all targets and current DESTDIR
 ```
 
-There are no tests or linting configured in this project.
+There is no linting configured. DSP unit tests run via `playdsp test` (see DSP Test Framework below).
 
 ## Architecture
 
@@ -37,7 +42,7 @@ PlayDSP is a CLI tool that compiles and executes user-written Rust and/or C++ DS
 
 ### Execution Flow
 
-1. **CLI parsing** (`src/main.rs`) — clap-based argument parsing with `new` subcommand and `-r`/`-c`/`-d`/`-a` flags. Initialises a Rayon thread pool via `ThreadPoolBuilder` at startup.
+1. **CLI parsing** (`src/main.rs`) — clap-based argument parsing with `new`/`test` subcommands and `-r`/`-c`/`-d`/`-a`/`-m` flags. Initialises a Rayon thread pool via `ThreadPoolBuilder` at startup.
 2. **File management** (`src/file_processing/`) — copies user code and audio files to standard locations under `../audio/`
 3. **Runtime compilation** (`src/program_recompile/run_recompile.rs`) — the core orchestration:
    - Creates `.playdsp_runtime/` project from embedded templates (`templates/`)
@@ -46,7 +51,7 @@ PlayDSP is a CLI tool that compiles and executes user-written Rust and/or C++ DS
    - Copies user Rust code as a `user_code` module and patches `main.rs` to delegate to it
    - Compiles C++ via the `cc` crate (C++20, `-O3` on GCC/Clang; `/O2`+`/EHsc` on MSVC)
    - Runs `cargo build --release` with stdout suppressed and stderr piped; `indicatif` spinner animates during compilation; stderr is surfaced only on failure; elapsed time printed on success
-4. **Parallel processing** (`src/signal_processing/`) — uses Rayon to invoke the runtime binary concurrently across all `(audio_file, program_path)` pairs via a single flattened `par_iter`. Per-file results are printed above the bar via `pb.println()` (thread-safe); progress bar tracks total pair count with elapsed time.
+4. **Parallel processing** (`src/signal_processing/`) — uses Rayon to invoke the runtime binary concurrently across all `(audio_file, program_path)` pairs via a single flattened `par_iter`. Per-file results are printed above the bar via `pb.println()` (thread-safe); progress bar tracks total pair count with elapsed time. When `--meta` is set, `--meta` is appended to each runtime invocation.
 
 ### Key Directory Layout (runtime, relative to execution dir)
 
@@ -56,7 +61,8 @@ PlayDSP is a CLI tool that compiles and executes user-written Rust and/or C++ DS
 ├── source/                 # Input WAV files
 ├── processing/
 │   ├── rust/               # User Rust code (entry: rust_process_audio.rs)
-│   └── cpp/                # User C++ code (entry: cpp_process_audio.cpp)
+│   ├── cpp/                # User C++ code (entry: cpp_process_audio.cpp)
+│   └── tests/              # User DSP test files (*.rs, run via playdsp test)
 └── result/                 # Output WAV files (timestamped)
 ```
 
@@ -66,7 +72,7 @@ All paths are defined as `static LazyLock<PathBuf>` in `src/constants/constants.
 
 Three templates in `templates/` are embedded at compile time via `include_str!` in `run_recompile.rs`:
 - `Cargo.toml.template` — runtime manifest; user dependencies are injected after `[dependencies]`. Includes `[profile.release]` with `lto = true` and `codegen-units = 1`.
-- `main.rs.template` — runtime entry point with WAV I/O (bwavfile), Rust/C++ dispatch, buffer processing (1024-sample chunks), AVX SIMD f64→f32 conversion, post-FFI NaN/Inf validation, and reverb tail padding logic. Contains marker comments that get patched to wire in user code.
+- `main.rs.template` — runtime entry point with WAV I/O (bwavfile), Rust/C++ dispatch, buffer processing (1024-sample chunks), AVX SIMD f64→f32 conversion, post-FFI NaN/Inf validation, reverb tail padding logic, and optional BWF `bext` metadata passthrough. Contains marker comments that get patched to wire in user code.
 - `build.rs.template` — recursively finds and compiles C++ files with `cc`. Uses platform-conditional flags: `-O3`/`-std=c++20` on GCC/Clang, `/O2`/`/std:c++20`/`/EHsc` on MSVC, `-fPIC` added on Linux.
 
 ### Dependency Detection
@@ -83,6 +89,7 @@ Three templates in `templates/` are embedded at compile time via `include_str!` 
 - Audio normalised to f64 `[-1.0, 1.0]` for processing
 - C++ FFI uses `extern "C"` with flattened interleaved buffers; output validated for NaN/Inf after each call
 - f64→f32 conversion uses AVX intrinsics (`_mm256_cvtpd_ps`) with `is_x86_feature_detected!` runtime guard and scalar fallback
+- BWF metadata (`bext` chunk) is always read from input via `WaveReader::broadcast_extension()`; written to output via `WaveWriter::write_broadcast_metadata(&Bext)` only when the `--meta` / `-m` flag is passed. Without the flag the `bext` chunk is discarded (default behaviour). `write_broadcast_metadata` must be called before `audio_frame_writer()` — the template enforces this ordering.
 
 ### Reverb Tail Capture (always-on)
 
@@ -112,6 +119,20 @@ The starter files written by `playdsp new` (`create_folders_and_copy_files.rs`) 
 
 - **Rust**: `static STATE: LazyLock<Mutex<State>>` — initialised once on the first buffer call. `rust_process()` calls `STATE.lock().unwrap().process(input, output)` and returns. Add fields to `State` and implement them in `State::process()`. Per-channel `Vec`s are grown lazily because channel count is only known at call time.
 - **C++**: Four statics inside `cpp_process()` — `state_mutex`, `state`, `input_vector`, `output_vector` — all protected by `std::scoped_lock` (C++17, full mutual exclusion; not just init-safe). `input_vector`/`output_vector` are reused every call, eliminating per-buffer heap allocation; they are resized lazily when dimensions change. `State::process()` receives the pre-deinterleaved 2D vectors by reference and does only DSP — no raw pointer arithmetic inside DSP logic. Add fields to `State` and implement them in `State::process()`.
+
+### DSP Test Framework (`playdsp test`)
+
+`playdsp test` recompiles the runtime in test mode and runs standard Rust `#[test]` functions the user writes in `audio/processing/tests/`. No new crates are required.
+
+**How it works:**
+- `run_tests(rust_only, cpp_only)` (`src/program_recompile/run_tests.rs`) calls `setup_runtime_project` and `inject_user_rust_code` (reused from `run_recompile.rs`), then `inject_test_files` (defined in `run_tests.rs`) copies test files and appends `#[cfg(test)] mod` declarations to `mod.rs`, then runs `cargo test` with all output inherited (not suppressed)
+- Test files are NOT injected during normal audio processing — only during `playdsp test`
+- Rust test files use `use super::rust_process_audio::rust_process;` to call Rust DSP; C++ test files call `crate::cpp_process_audio_wrapper()` (the safe wrapper defined in `main.rs.template`)
+- `playdsp new` writes two starter files: `rust_tests.rs` (Rust) and `cpp_tests.rs` (C++) to `processing/tests/`
+
+**File naming convention for `--rust`/`--cpp` filtering**: files prefixed with `cpp_` are treated as C++ tests; all others are Rust tests. `inject_test_files` uses this to determine which files to copy based on the mode flag.
+
+**State note**: `STATE` (Rust) and the C++ statics are global singletons; stateless DSP tests are independent, stateful DSP tests may need warm-up calls or manual state resets between tests. `cargo test` runs tests in parallel threads by default — both Rust and C++ test modules run concurrently within a single `cargo test` invocation.
 
 ### MSRV
 

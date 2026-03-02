@@ -7,6 +7,7 @@ pub(crate) fn create_folders_and_copy_files(base_dir: &str) {
     let processing_dir = audio_dir.join(PROCESSING_NAME);
     let rust_dir = processing_dir.join("rust");
     let cpp_dir = processing_dir.join("cpp");
+    let tests_dir = processing_dir.join("tests");
     let result_dir = audio_dir.join(RESULT_NAME);
     let source_dir = audio_dir.join(SOURCE_NAME);
 
@@ -16,6 +17,7 @@ pub(crate) fn create_folders_and_copy_files(base_dir: &str) {
         .expect(&*("Failed to create '".to_owned() + PROCESSING_NAME + "' directory"));
     create_dir_all(&rust_dir).expect("Failed to create 'rust' directory");
     create_dir_all(&cpp_dir).expect("Failed to create 'cpp' directory");
+    create_dir_all(&tests_dir).expect("Failed to create 'tests' directory");
     create_dir_all(&result_dir)
         .expect(&*("Failed to create '".to_owned() + RESULT_NAME + "' directory"));
     create_dir_all(&source_dir)
@@ -161,14 +163,169 @@ extern "C" void cpp_process(const double* input, size_t num_channels,
             output[k++] = output_vector[channel][sample];
 }"#;
 
+    let cpp_tests_file_content = r#"// ============================================================================
+// cpp_tests.rs — PlayDSP C++ DSP test suite
+// ============================================================================
+// Run with: playdsp test
+// Run C++ tests only: playdsp test --cpp
+//
+// Tests call crate::cpp_process_audio_wrapper() directly — the same safe
+// Rust wrapper used during audio file processing. No audio files are needed.
+//
+// NOTE ON STATE: The C++ DSP state is held in statics inside cpp_process().
+// Stateless DSP (gain, EQ) — tests are fully independent.
+// Stateful DSP (filters, delays) — call cpp_process_audio_wrapper() a few
+// times first to flush transient state between tests.
+// ============================================================================
+
+const BUFFER_SIZE: usize = 1024;
+const TOLERANCE: f64 = 1e-9;
+
+fn make_buffer(value: f64, channels: usize) -> Vec<Vec<f64>> {
+    vec![vec![value; BUFFER_SIZE]; channels]
+}
+
+// Verify the default C++ starter code applies exactly -12 dB of gain.
+// Input: constant 1.0. Expected output: 10^(-12/20) ≈ 0.251189.
+#[test]
+fn test_cpp_gain_minus_12db() {
+    let expected = 10.0_f64.powf(-12.0 / 20.0);
+    let input = make_buffer(1.0, 2);
+    let mut output = make_buffer(0.0, 2);
+    crate::cpp_process_audio_wrapper(&input, &mut output);
+
+    for (ch, channel) in output.iter().enumerate() {
+        for (i, &sample) in channel.iter().enumerate() {
+            let err = (sample - expected).abs();
+            assert!(
+                err < TOLERANCE,
+                "ch{ch} sample {i}: expected {expected:.9}, got {sample:.9} (err {err:.2e})"
+            );
+        }
+    }
+}
+
+// Zero input must produce zero output for any linear DSP.
+#[test]
+fn test_cpp_silence_in_silence_out() {
+    let input = make_buffer(0.0, 2);
+    let mut output = make_buffer(0.0, 2);
+    crate::cpp_process_audio_wrapper(&input, &mut output);
+
+    for (ch, channel) in output.iter().enumerate() {
+        for (i, &sample) in channel.iter().enumerate() {
+            assert!(
+                sample.abs() < TOLERANCE,
+                "ch{ch} sample {i}: expected silence, got {sample:.2e}"
+            );
+        }
+    }
+}
+
+// Output buffer dimensions must match input dimensions.
+#[test]
+fn test_cpp_buffer_dimensions_preserved() {
+    let input = make_buffer(0.5, 2);
+    let mut output = make_buffer(0.0, 2);
+    crate::cpp_process_audio_wrapper(&input, &mut output);
+
+    assert_eq!(output.len(), input.len(), "channel count changed");
+    for ch in 0..output.len() {
+        assert_eq!(output[ch].len(), input[ch].len(), "sample count changed in ch{ch}");
+    }
+}
+"#;
+
+    let tests_file_content = r#"// ============================================================================
+// rust_tests.rs — PlayDSP Rust DSP test suite
+// ============================================================================
+// Run with: playdsp test
+// Run Rust tests only: playdsp test --rust
+//
+// These are standard Rust unit tests. rust_process() is called directly with
+// synthetic buffers so you get instant, deterministic feedback without needing
+// an audio file.
+//
+// NOTE ON STATE: The DSP State is a global singleton (LazyLock<Mutex<State>>).
+// Stateless DSP (gain, EQ) — tests are fully independent.
+// Stateful DSP (filters, delays) — call rust_process() a few times first to
+// flush transient state, or reset State fields manually between tests.
+// ============================================================================
+
+use super::rust_process_audio::rust_process;
+
+const BUFFER_SIZE: usize = 1024;
+const TOLERANCE: f64 = 1e-9;
+
+fn make_buffer(value: f64, channels: usize) -> Vec<Vec<f64>> {
+    vec![vec![value; BUFFER_SIZE]; channels]
+}
+
+// Verify the default starter code applies exactly -12 dB of gain.
+// Input: constant 1.0. Expected output: 10^(-12/20) ≈ 0.251189.
+#[test]
+fn test_gain_minus_12db() {
+    let expected = 10.0_f64.powf(-12.0 / 20.0);
+    let input = make_buffer(1.0, 2);
+    let mut output = make_buffer(0.0, 2);
+    rust_process(&input, &mut output);
+
+    for (ch, channel) in output.iter().enumerate() {
+        for (i, &sample) in channel.iter().enumerate() {
+            let err = (sample - expected).abs();
+            assert!(
+                err < TOLERANCE,
+                "ch{ch} sample {i}: expected {expected:.9}, got {sample:.9} (err {err:.2e})"
+            );
+        }
+    }
+}
+
+// Zero input must produce zero output for any linear DSP.
+#[test]
+fn test_silence_in_silence_out() {
+    let input = make_buffer(0.0, 2);
+    let mut output = make_buffer(0.0, 2);
+    rust_process(&input, &mut output);
+
+    for (ch, channel) in output.iter().enumerate() {
+        for (i, &sample) in channel.iter().enumerate() {
+            assert!(
+                sample.abs() < TOLERANCE,
+                "ch{ch} sample {i}: expected silence, got {sample:.2e}"
+            );
+        }
+    }
+}
+
+// Output buffer dimensions must match input dimensions.
+#[test]
+fn test_buffer_dimensions_preserved() {
+    let input = make_buffer(0.5, 2);
+    let mut output = make_buffer(0.0, 2);
+    rust_process(&input, &mut output);
+
+    assert_eq!(output.len(), input.len(), "channel count changed");
+    for ch in 0..output.len() {
+        assert_eq!(output[ch].len(), input[ch].len(), "sample count changed in ch{ch}");
+    }
+}
+"#;
+
     let rust_file_path = rust_dir.join("rust_process_audio.rs");
     let cpp_file_path = cpp_dir.join("cpp_process_audio.cpp");
+    let tests_file_path = tests_dir.join("rust_tests.rs");
+    let cpp_tests_file_path = tests_dir.join("cpp_tests.rs");
 
     write(&rust_file_path, rust_file_content).expect("Failed to write Rust file");
     write(&cpp_file_path, cpp_file_content).expect("Failed to write C++ file");
+    write(&tests_file_path, tests_file_content).expect("Failed to write DSP tests file");
+    write(&cpp_tests_file_path, cpp_tests_file_content).expect("Failed to write C++ tests file");
 
-    println!("Created folder structure with rust/ and cpp/ subdirectories");
+    println!("Created folder structure with rust/, cpp/, and tests/ subdirectories");
     println!("Rust processing files: {}", rust_dir.display());
     println!("C++ processing files: {}", cpp_dir.display());
+    println!("DSP test files: {}", tests_dir.display());
     println!("Place your audio files in: {}", source_dir.display());
+    println!("Run 'playdsp test' to execute your DSP tests");
 }
