@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86_64 runners all support AVX; PLAYDSP_REQUIRE_AVX makes the
+          # runtime self-tests fail instead of skip if the AVX path can't run.
+          - name: Linux x86_64 (GCC)
+            os: ubuntu-latest
+            require_avx: "1"
+          - name: Windows x86_64 (MSVC)
+            os: windows-latest
+            require_avx: "1"
+          - name: Linux arm64 (GCC)
+            os: ubuntu-24.04-arm
+            require_avx: "0"
+          - name: macOS arm64 (Clang)
+            os: macos-latest
+            require_avx: "0"
+    env:
+      PLAYDSP_REQUIRE_AVX: ${{ matrix.require_avx }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: CLI unit tests
+        run: cargo test --locked
+
+      - name: End-to-end tests (runtime build, audio rendering, self-tests)
+        run: python ci/e2e_test.py
+
+  msrv:
+    name: MSRV (Rust 1.85, Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: CLI unit tests
+        run: cargo test --locked
+
+      # The generated runtime is built with the same toolchain, so this also
+      # checks the templates compile on the minimum supported Rust.
+      - name: End-to-end tests
+        run: python ci/e2e_test.py

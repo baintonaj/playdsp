@@ -16,25 +16,6 @@ use program_recompile::run_tests::*;
 use clap::{Arg, ArgAction, Command};
 use constants::constants::*;
 
-fn check_cpp_files_recursive(dir: &std::path::Path) -> bool {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path.is_dir() {
-                if check_cpp_files_recursive(&path) {
-                    return true;
-                }
-            } else {
-                let ext = path.extension().and_then(|s| s.to_str());
-                if ext == Some("cpp") || ext == Some("h") || ext == Some("hpp") {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
 fn main() {
     rayon::ThreadPoolBuilder::new()
         .num_threads(
@@ -85,14 +66,14 @@ fn main() {
             .long("rust")
             .required(false)
             .num_args(0)
-            .action(ArgAction::Set)
+            .action(ArgAction::SetTrue)
             .help("Process with Rust code"))
         .arg(Arg::new("cpp")
             .short('c')
             .long("cpp")
             .required(false)
             .num_args(0)
-            .action(ArgAction::Set)
+            .action(ArgAction::SetTrue)
             .help("Process with C++ code"))
         .arg(Arg::new(CODE_FILE_PATH_NAME)
             .short('d')
@@ -131,28 +112,23 @@ fn main() {
         return;
     }
 
-    let rust_present = matches.contains_id("rust");
-    let cpp_present = matches.contains_id("cpp");
+    // Neither flag, or both flags, means process with both languages.
+    let rust_flag = matches.get_flag("rust");
+    let cpp_flag = matches.get_flag("cpp");
+    let use_rust = rust_flag || !cpp_flag;
+    let use_cpp = cpp_flag || !rust_flag;
     let preserve_meta = matches.get_flag("meta");
 
     if let Some(folder_path) = matches.get_one::<String>(CODE_FILE_PATH_NAME) {
-        if rust_present && !cpp_present {
-            if let Err(e) = process_and_copy_files(folder_path, "rust") {
-                eprintln!("Error processing folder for Rust: {}", e);
-                return;
-            }
-        } else if cpp_present && !rust_present {
-            if let Err(e) = process_and_copy_files(folder_path, "cpp") {
-                eprintln!("Error processing folder for C++: {}", e);
-                return;
-            }
-        } else if !rust_present && !cpp_present {
-            if let Err(e) = process_and_copy_files(folder_path, "both") {
-                eprintln!("Error processing folder for both Rust and C++: {}", e);
-                return;
-            }
+        let file_type = match (use_rust, use_cpp) {
+            (true, false) => "rust",
+            (false, true) => "cpp",
+            _ => "both",
+        };
+        if let Err(e) = process_and_copy_files(folder_path, file_type) {
+            eprintln!("Error processing code folder '{}': {}", folder_path, e);
+            return;
         }
-        run_recompile(&matches);
     }
 
     if let Some(input_folder) = matches.get_one::<String>(AUDIO_FILE_PATH_NAME) {
@@ -168,48 +144,43 @@ fn main() {
     let rust_dir = RUST_FOLDER.as_path();
     let cpp_dir = CPP_FOLDER.as_path();
 
-    let has_rust_files = rust_dir.exists() && rust_dir.join("rust_process_audio.rs").exists();
-    let has_dependencies_toml = rust_dir.exists() && rust_dir.join("dependencies.toml").exists();
-    let has_cpp_files = cpp_dir.exists() && check_cpp_files_recursive(&cpp_dir);
+    let has_rust_files = rust_dir.join("rust_process_audio.rs").exists();
+    let has_dependencies_toml = rust_dir.join("dependencies.toml").exists();
+    let has_cpp_code = has_cpp_files(cpp_dir);
 
-    if has_rust_files || has_cpp_files || has_dependencies_toml {
+    // Compiled once per run. Unchanged sources make this a fast cargo no-op.
+    if has_rust_files || has_cpp_code || has_dependencies_toml {
         println!("DSP code detected - recompiling runtime to ensure latest changes...");
-        run_recompile(&matches);
+        run_recompile();
     } else if !runtime_binary.exists() {
         println!("Runtime binary not found. Compiling runtime with default code...");
-        run_recompile(&matches);
+        run_recompile();
     }
 
-    if !rust_present && !cpp_present {
-        println!("Processing with both Rust and C++ code");
-    } else if rust_present {
-        println!("Processing with Rust code");
-    } else if cpp_present {
-        println!("Processing with C++ code");
+    let audio_files_to_process = get_audio_files_from_folder(&SOURCE_FOLDER);
+    if audio_files_to_process.is_empty() {
+        println!("No .wav files found in {}", SOURCE_FOLDER.display());
+        return;
     }
 
-    let audio_files_to_process = get_audio_files_from_folder(SOURCE_NAME);
-
-    let mut rust_files: Vec<String> = vec![];
-    let mut cpp_files: Vec<String> = vec![];
-
-    if !rust_present && !cpp_present {
-        rust_files = get_program_files(RUST_FOLDER.to_str().unwrap_or(""), "rs");
-        cpp_files = get_program_files(CPP_FOLDER.to_str().unwrap_or(""), "cpp");
-    } else if rust_present {
-        rust_files = get_program_files(RUST_FOLDER.to_str().unwrap_or(""), "rs");
-    } else if cpp_present {
-        cpp_files = get_program_files(CPP_FOLDER.to_str().unwrap_or(""), "cpp");
+    let mut program_files: Vec<String> = vec![];
+    if use_rust {
+        program_files.extend(get_program_files(RUST_FOLDER.to_str().unwrap_or(""), "rs"));
+    }
+    if use_cpp {
+        program_files.extend(get_program_files(CPP_FOLDER.to_str().unwrap_or(""), "cpp"));
     }
 
-    if !rust_present && !cpp_present {
-        let mut all_files = Vec::new();
-        all_files.append(rust_files.as_mut());
-        all_files.append(cpp_files.as_mut());
-        process_multiple_audio_files(&audio_files_to_process, &all_files, preserve_meta);
-    } else if rust_present {
-        process_multiple_audio_files(&audio_files_to_process, &rust_files, preserve_meta);
-    } else if cpp_present {
-        process_multiple_audio_files(&audio_files_to_process, &cpp_files, preserve_meta);
+    match (use_rust, use_cpp) {
+        (true, false) => println!("Processing with Rust code"),
+        (false, true) => println!("Processing with C++ code"),
+        _ => println!("Processing with both Rust and C++ code"),
     }
+
+    if program_files.is_empty() {
+        println!("No DSP entry files found (rust_process_audio.rs / cpp_process_audio.cpp)");
+        return;
+    }
+
+    process_multiple_audio_files(&audio_files_to_process, &program_files, preserve_meta);
 }

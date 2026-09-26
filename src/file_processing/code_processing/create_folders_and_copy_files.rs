@@ -49,6 +49,16 @@ pub(crate) fn create_folders_and_copy_files(base_dir: &str) {
 //       self.prev_sample.resize(input.len(), 0.0);
 //   }
 //
+//
+// RUNTIME HELPERS
+// ---------------
+// crate::playdsp_sample_rate() -> f64
+//     Sample rate of the file being processed (48000 in `playdsp test`).
+//     Use it for filter coefficients, delay times in ms, LFO rates, etc.
+// crate::playdsp_set_latency(samples: usize)
+//     Report your DSP's latency (look-ahead, linear-phase FIR). The output is
+//     shifted back by this many samples so it lines up with the input.
+//
 // ============================================================================
 
 use std::sync::{LazyLock, Mutex};
@@ -107,12 +117,24 @@ pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
 //   if (prev_sample.size() < num_channels)
 //       prev_sample.resize(num_channels, 0.0);
 //
+//
+// RUNTIME HELPERS (declared below, provided by PlayDSP)
+// ---------------
+// playdsp_sample_rate()
+//     Sample rate of the file being processed (48000 in `playdsp test`).
+// playdsp_set_latency(samples)
+//     Report your DSP's latency (look-ahead, linear-phase FIR). The output is
+//     shifted back by this many samples so it lines up with the input.
+//
 // ============================================================================
 
 #include <cstddef>
 #include <cmath>
 #include <mutex>
 #include <vector>
+
+extern "C" double playdsp_sample_rate();
+extern "C" void playdsp_set_latency(std::size_t samples);
 
 struct State {
     // Add per-channel DSP state here.
@@ -317,10 +339,10 @@ fn test_buffer_dimensions_preserved() {
     let tests_file_path = tests_dir.join("rust_tests.rs");
     let cpp_tests_file_path = tests_dir.join("cpp_tests.rs");
 
-    write(&rust_file_path, rust_file_content).expect("Failed to write Rust file");
-    write(&cpp_file_path, cpp_file_content).expect("Failed to write C++ file");
-    write(&tests_file_path, tests_file_content).expect("Failed to write DSP tests file");
-    write(&cpp_tests_file_path, cpp_tests_file_content).expect("Failed to write C++ tests file");
+    write_starter_file(&rust_file_path, rust_file_content);
+    write_starter_file(&cpp_file_path, cpp_file_content);
+    write_starter_file(&tests_file_path, tests_file_content);
+    write_starter_file(&cpp_tests_file_path, cpp_tests_file_content);
 
     println!("Created folder structure with rust/, cpp/, and tests/ subdirectories");
     println!("Rust processing files: {}", rust_dir.display());
@@ -328,4 +350,14 @@ fn test_buffer_dimensions_preserved() {
     println!("DSP test files: {}", tests_dir.display());
     println!("Place your audio files in: {}", source_dir.display());
     println!("Run 'playdsp test' to execute your DSP tests");
+}
+
+// Never overwrite: re-running `playdsp new` in an existing project must not
+// destroy the user's DSP code or tests.
+fn write_starter_file(path: &Path, content: &str) {
+    if path.exists() {
+        println!("Skipped {} (already exists)", path.display());
+        return;
+    }
+    write(path, content).unwrap_or_else(|e| panic!("Failed to write {}: {}", path.display(), e));
 }

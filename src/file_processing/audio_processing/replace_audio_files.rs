@@ -6,7 +6,7 @@ use std::path::Path;
 use std::{fs, io};
 
 pub(crate) fn replace_audio_files(input_folder: &str) -> io::Result<()> {
-    let input_wav_files = get_audio_files_from_folder(input_folder);
+    let input_wav_files = get_audio_files_from_folder(Path::new(input_folder));
     let input_wav_files_len = input_wav_files.len();
 
     if input_wav_files.is_empty() {
@@ -16,10 +16,11 @@ pub(crate) fn replace_audio_files(input_folder: &str) -> io::Result<()> {
         ));
     }
 
-    let source_entries = fs::read_dir(&*SOURCE_FOLDER)?;
-    for entry in source_entries {
+    // Replace only the WAVs; leave any other files the user keeps in source/.
+    fs::create_dir_all(&*SOURCE_FOLDER)?;
+    for entry in fs::read_dir(&*SOURCE_FOLDER)? {
         let path = entry?.path();
-        if path.is_file() {
+        if is_wav_file(&path) {
             remove_file(&path)?;
         }
     }

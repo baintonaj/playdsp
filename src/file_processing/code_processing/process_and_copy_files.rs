@@ -6,6 +6,12 @@ use std::{fs, io};
 
 pub(crate) fn process_and_copy_files(folder_path: &str, file_type: &str) -> io::Result<()> {
     let files = get_files_from_folder(folder_path)?;
+    if files.is_empty() {
+        eprintln!(
+            "No rust_process_audio.rs or cpp_process_audio.cpp found in '{}'",
+            folder_path
+        );
+    }
 
     for file in files {
         let file_path = match file.to_str() {
@@ -71,24 +77,32 @@ fn validate_file(file_path: &str) -> io::Result<bool> {
     Ok(false)
 }
 
+const CPP_SIGNATURE: &str =
+    "extern \"C\" void cpp_process(const double* input, size_t num_channels, size_t num_samples, double* output)";
+const RUST_SIGNATURE: &str =
+    "pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>)";
+
 fn check_cpp_function_signature(file_path: &str) -> io::Result<bool> {
-    let mut file = fs::File::open(file_path)?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-    let normalized: String = contents.split_whitespace().collect::<Vec<_>>().join(" ");
-    Ok(normalized.contains(
-        "extern \"C\" void cpp_process ( const double * input , size_t num_channels , size_t num_samples , double * output )"
-    ))
+    Ok(contains_signature(&read_file(file_path)?, CPP_SIGNATURE))
 }
 
 fn check_rust_function_signature(file_path: &str) -> io::Result<bool> {
-    let mut file = fs::File::open(file_path)?;
+    Ok(contains_signature(&read_file(file_path)?, RUST_SIGNATURE))
+}
+
+fn read_file(file_path: &str) -> io::Result<String> {
     let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-    let normalized: String = contents.split_whitespace().collect::<Vec<_>>().join(" ");
-    Ok(normalized.contains(
-        "pub fn rust_process ( input : & Vec < Vec < f64 > > , output : & mut Vec < Vec < f64 > > )"
-    ))
+    fs::File::open(file_path)?.read_to_string(&mut contents)?;
+    Ok(contents)
+}
+
+// Whitespace-insensitive match: both sides have all whitespace removed, so
+// `const double* input`, `const double *input` and line-wrapped parameter
+// lists all match. `externC` cannot occur in valid code, so collapsing the
+// space between keywords doesn't create false positives in practice.
+fn contains_signature(contents: &str, signature: &str) -> bool {
+    let strip = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    strip(contents).contains(&strip(signature))
 }
 
 fn copy_to_processing_folder(file_path: &str) -> io::Result<()> {
@@ -123,4 +137,33 @@ fn copy_to_processing_folder(file_path: &str) -> io::Result<()> {
     println!("File copied to: {}", destination.display());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_conventionally_formatted_signatures() {
+        let rust = "pub fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {";
+        assert!(contains_signature(rust, RUST_SIGNATURE));
+        let cpp = "extern \"C\" void cpp_process(const double* input, size_t num_channels,\n                             size_t num_samples, double* output) {";
+        assert!(contains_signature(cpp, CPP_SIGNATURE));
+    }
+
+    #[test]
+    fn accepts_unusual_whitespace() {
+        let rust = "pub  fn rust_process (\n    input : & Vec<Vec<f64>>,\n    output: &mut Vec< Vec<f64> >\n)";
+        assert!(contains_signature(rust, RUST_SIGNATURE));
+        let cpp = "extern \"C\"\nvoid cpp_process(const double *input, size_t num_channels, size_t num_samples, double *output)";
+        assert!(contains_signature(cpp, CPP_SIGNATURE));
+    }
+
+    #[test]
+    fn rejects_wrong_signatures() {
+        assert!(!contains_signature("pub fn rust_process(input: &[f64], output: &mut [f64])", RUST_SIGNATURE));
+        assert!(!contains_signature("fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>)", RUST_SIGNATURE));
+        assert!(!contains_signature("void cpp_process(const double* input, size_t num_channels, size_t num_samples, double* output)", CPP_SIGNATURE));
+        assert!(!contains_signature("extern \"C\" void cpp_process(const float* input, size_t num_channels, size_t num_samples, float* output)", CPP_SIGNATURE));
+    }
 }

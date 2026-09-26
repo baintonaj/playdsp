@@ -4,6 +4,8 @@
 #   all            Build release binary (default)
 #   build          Build debug binary
 #   release        Build optimised release binary
+#   test           Run the CLI unit tests
+#   e2e            Build release and run the end-to-end suite (ci/e2e_test.py)
 #   install        Copy release binary to DESTDIR
 #   reinstall      Clean, rebuild, and reinstall in one step (run with sudo on Unix)
 #   install-cargo  Install via `cargo install` (simplest cross-platform option)
@@ -55,7 +57,7 @@ DEBUG_BIN   := target/debug/$(BIN)
 # Targets
 # ---------------------------------------------------------------------------
 
-.PHONY: all build release install reinstall install-cargo uninstall clean help
+.PHONY: all build release test e2e install reinstall install-cargo uninstall clean help
 
 all: release
 
@@ -64,6 +66,14 @@ build:
 
 release:
 	cargo build --release
+
+test:
+	cargo test
+
+# Runs natively on this machine. Other platforms (Linux/Windows x86_64 with
+# the AVX path, Linux arm64, MSRV) are covered by .github/workflows/ci.yml.
+e2e: release
+	python3 ci/e2e_test.py
 
 install: release
 	$(_MKDIR) "$(DESTDIR)"
@@ -95,6 +105,8 @@ help:
 	@echo "  all            Build release binary (default)"
 	@echo "  build          Build debug binary"
 	@echo "  release        Build optimised release binary"
+	@echo "  test           Run the CLI unit tests"
+	@echo "  e2e            Build release and run the end-to-end suite"
 	@echo "  install        Copy release binary to DESTDIR"
 	@echo "  reinstall      Clean, rebuild, and reinstall in one step"
 	@echo "  install-cargo  Install via 'cargo install' (cross-platform, no DESTDIR needed)"
