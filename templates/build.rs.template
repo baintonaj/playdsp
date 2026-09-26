@@ -5,10 +5,18 @@ use cc;
 fn main() {
     let cpp_dir = Path::new("../processing/cpp");
     println!("cargo:rerun-if-changed=build.rs");
+    // Lets main.rs use #[cfg(playdsp_has_cpp)] without an unexpected-cfg warning.
+    println!("cargo::rustc-check-cfg=cfg(playdsp_has_cpp)");
+    // Set by CI (RUSTFLAGS="--cfg playdsp_selftest") to compile the runtime self-tests.
+    println!("cargo::rustc-check-cfg=cfg(playdsp_selftest)");
     let mut cpp_files = Vec::new();
 
     if cpp_dir.exists() {
+        // Watching the directory (not just each file) also catches added/removed files.
+        println!("cargo:rerun-if-changed={}", cpp_dir.display());
         scan_cpp_files_recursive(&cpp_dir, &mut cpp_files);
+    } else {
+        println!("cargo:rerun-if-changed=../processing");
     }
 
     if !cpp_files.is_empty() {
@@ -32,6 +40,7 @@ fn main() {
         }
 
         build.compile("cpp_process_audio");
+        println!("cargo:rustc-cfg=playdsp_has_cpp");
     }
 }
 

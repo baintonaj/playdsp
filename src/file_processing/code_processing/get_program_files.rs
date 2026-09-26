@@ -24,3 +24,23 @@ pub(crate) fn get_program_files(folder: &str, extension: &str) -> Vec<String> {
 
     files
 }
+
+// True if the folder (recursively) contains any C++ source or header files.
+pub(crate) fn has_cpp_files(dir: &std::path::Path) -> bool {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                if has_cpp_files(&path) {
+                    return true;
+                }
+            } else {
+                let ext = path.extension().and_then(|s| s.to_str());
+                if ext == Some("cpp") || ext == Some("h") || ext == Some("hpp") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}

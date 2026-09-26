@@ -1,5 +1,36 @@
 use std::env;
-use bwavfile::{Bext, WaveFmt, WaveReader, WaveWriter};
+use std::io::Read;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use bwavfile::{Bext, CommonFormat, WaveFmt, WaveReader, WaveWriter};
+
+const BUFFER_SIZE: usize = 1024;
+const PRE_PAD_SECONDS: usize = 1;
+const POST_PAD_SECONDS: usize = 12;
+const DEFAULT_SAMPLE_RATE: u32 = 48000;
+
+// ---------------------------------------------------------------------------
+// Runtime API available to user DSP code.
+// Rust: crate::playdsp_sample_rate(), crate::playdsp_set_latency(n)
+// C++:  extern "C" double playdsp_sample_rate();
+//       extern "C" void playdsp_set_latency(size_t samples);
+// ---------------------------------------------------------------------------
+
+static SAMPLE_RATE: AtomicU32 = AtomicU32::new(DEFAULT_SAMPLE_RATE);
+static LATENCY_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+
+/// Sample rate of the file being processed (48000 in `playdsp test`).
+#[no_mangle]
+pub extern "C" fn playdsp_sample_rate() -> f64 {
+    SAMPLE_RATE.load(Ordering::Relaxed) as f64
+}
+
+/// Report the DSP's processing latency in samples (look-ahead, linear-phase
+/// FIR, etc.). The runtime shifts the output by this amount so it lines up
+/// with the input, like plugin delay compensation in a DAW.
+#[no_mangle]
+pub extern "C" fn playdsp_set_latency(samples: usize) {
+    LATENCY_SAMPLES.store(samples, Ordering::Relaxed);
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -15,125 +46,136 @@ fn main() {
     let preserve_meta = args.get(4).map(|a| a == "--meta").unwrap_or(false);
 
     if let Err(e) = process_audio(input_path, output_path, mode, preserve_meta) {
-        eprintln!("Error processing audio: {}", e);
+        eprintln!("Error processing '{}': {}", input_path, e);
         std::process::exit(1);
     }
 }
 
 fn process_audio(input_path: &str, output_path: &str, mode: &str, preserve_meta: bool) -> Result<(), String> {
-    let (header, bext, mut samples_f64): (WaveFmt, Option<Bext>, Vec<Vec<f64>>) = read_wav(input_path)?;
+    match mode {
+        "rs" => {}
+        "cpp" if cfg!(playdsp_has_cpp) => {}
+        "cpp" => return Err("no C++ code was compiled (processing/cpp/ has no .cpp files)".to_string()),
+        other => return Err(format!("unknown processing mode '{}': expected 'rs' or 'cpp'", other)),
+    }
+
+    let (header, bext, input) = read_wav(input_path)?;
 
     let sample_rate = header.sample_rate as usize;
-    let num_channels = samples_f64.len();
+    SAMPLE_RATE.store(header.sample_rate, Ordering::Relaxed);
 
-    let original_length = samples_f64[0].len();
-    let pre_pad_length = sample_rate; // 1 second of zeros
-    let post_pad_length = sample_rate * 12; // 12 seconds of zeros
-
-    for ch in samples_f64.iter_mut() {
-        let mut padded = vec![0.0_f64; pre_pad_length];
-        padded.append(ch);
-        padded.extend(vec![0.0_f64; post_pad_length]);
-        *ch = padded;
-    }
-
-    const BUFFER_SIZE: usize = 1024;
-    let total_samples = samples_f64[0].len();
+    let num_channels = input.channels.len();
+    let total_samples = input.channels[0].len();
+    let pre_pad_length = input.pre_pad_length;
+    let original_length = input.original_length;
+    let post_pad_length = total_samples - pre_pad_length - original_length;
     let num_buffers = (total_samples + BUFFER_SIZE - 1) / BUFFER_SIZE;
 
-    let mut buffered_samples = vec![vec![vec![0.0; BUFFER_SIZE]; num_channels]; num_buffers];
+    // Two reusable block buffers; results are written straight into the
+    // planar output, so no whole-file block arrays are allocated.
+    let mut in_block = vec![vec![0.0_f64; BUFFER_SIZE]; num_channels];
+    let mut out_block = vec![vec![0.0_f64; BUFFER_SIZE]; num_channels];
+    let mut processed = vec![vec![0.0_f64; total_samples]; num_channels];
+    let mut non_finite_count = 0usize;
 
-    for i in 0..total_samples {
-        let buffer_index = i / BUFFER_SIZE;
-        let sample_index = i % BUFFER_SIZE;
-        for channel in 0..num_channels {
-            buffered_samples[buffer_index][channel][sample_index] = samples_f64[channel][i];
-        }
-    }
-
-    let mut processed_samples_f64 = vec![vec![vec![0.0; BUFFER_SIZE]; num_channels]; num_buffers];
-
-    if mode == "rs" {
-        for (buffer_index, buffer) in buffered_samples.iter().enumerate() {
-            rust_process(buffer, &mut processed_samples_f64[buffer_index]);
-        }
-    } else if mode == "cpp" {
-        for (buffer_index, buffer) in buffered_samples.iter().enumerate() {
-            cpp_process_audio_wrapper(buffer, &mut processed_samples_f64[buffer_index]);
-        }
-    }
-
-    let mut processed_samples_2d_f64 = vec![vec![0.0; total_samples]; num_channels];
     for buffer_index in 0..num_buffers {
+        let start = buffer_index * BUFFER_SIZE;
+        let len = BUFFER_SIZE.min(total_samples - start);
+
         for channel in 0..num_channels {
-            for sample_index in 0..BUFFER_SIZE {
-                let flat_index = buffer_index * BUFFER_SIZE + sample_index;
-                if flat_index < total_samples {
-                    processed_samples_2d_f64[channel][flat_index] = processed_samples_f64[buffer_index][channel][sample_index];
+            in_block[channel][..len].copy_from_slice(&input.channels[channel][start..start + len]);
+            in_block[channel][len..].fill(0.0);
+            out_block[channel].fill(0.0);
+        }
+
+        if mode == "rs" {
+            rust_process(&in_block, &mut out_block);
+        } else {
+            cpp_process_audio_wrapper(&in_block, &mut out_block);
+        }
+
+        // Replace NaN/Inf with silence so one bad sample can't poison the file.
+        for channel in 0..num_channels {
+            let dst = &mut processed[channel][start..start + len];
+            for (d, &s) in dst.iter_mut().zip(out_block[channel][..len].iter()) {
+                if s.is_finite() {
+                    *d = s;
+                } else {
+                    non_finite_count += 1;
+                    *d = 0.0;
                 }
             }
         }
     }
+    drop(input);
 
-    let source_end_index = pre_pad_length + original_length;
-    let cutoff_index = detect_tail_cutoff(&processed_samples_2d_f64, source_end_index, sample_rate);
-    let final_samples_f64: Vec<Vec<f64>> = processed_samples_2d_f64.iter()
-        .map(|ch| ch[pre_pad_length..cutoff_index].to_vec())
-        .collect();
+    if non_finite_count > 0 {
+        eprintln!(
+            "Warning: {} DSP produced {} non-finite samples (NaN/Inf) in '{}'; replaced with 0.0",
+            if mode == "rs" { "Rust" } else { "C++" },
+            non_finite_count,
+            input_path
+        );
+    }
 
-    let processed_samples: Vec<Vec<f32>> = final_samples_f64.iter()
+    // Latency compensation: skip the reported latency so output aligns with input.
+    let reported_latency = LATENCY_SAMPLES.load(Ordering::Relaxed);
+    let latency = reported_latency.min(post_pad_length);
+    if latency < reported_latency {
+        eprintln!("Warning: reported latency {} samples exceeds the tail padding; clamped to {}", reported_latency, latency);
+    }
+    let output_start = pre_pad_length + latency;
+    let source_end_index = output_start + original_length;
+    let hard_cap = (source_end_index + sample_rate * POST_PAD_SECONDS).min(total_samples);
+    let cutoff_index = detect_tail_cutoff(&processed, source_end_index, hard_cap);
+
+    let processed_samples: Vec<Vec<f32>> = processed.iter()
         .map(|channel| {
-            let mut out = vec![0.0f32; channel.len()];
-            convert_f64_to_f32(channel, &mut out);
+            let region = &channel[output_start..cutoff_index];
+            let mut out = vec![0.0f32; region.len()];
+            convert_f64_to_f32(region, &mut out);
             out
         })
         .collect();
+    drop(processed);
 
     let bext_to_write = if preserve_meta { bext } else { None };
-    if let Err(err) = write_wav(&output_path, &processed_samples, header, bext_to_write) {
-        return Err(format!("Error writing WAV file: {}", err));
-    }
-
-    Ok(())
+    write_wav(output_path, &processed_samples, header, bext_to_write)
+        .map_err(|err| format!("Error writing WAV file: {}", err))
 }
 
-fn detect_tail_cutoff(samples: &[Vec<f64>], source_end_index: usize, sample_rate: usize) -> usize {
+/// Returns the end of the reverb/delay tail: the end of the *last* 1024-sample
+/// window after the source whose RMS is at or above -144 dBFS. Scanning all
+/// windows (rather than stopping at the first quiet one) keeps late echoes
+/// that arrive after a silent gap, e.g. a long delay or pre-delayed reverb.
+fn detect_tail_cutoff(samples: &[Vec<f64>], source_end_index: usize, hard_cap: usize) -> usize {
     const TAIL_THRESHOLD: f64 = 6.31e-8; // -144 dBFS
     const WINDOW_SIZE: usize = 1024;
-    let total_length = samples[0].len();
-    let hard_cap = (source_end_index + sample_rate * 12).min(total_length);
+    let mut cutoff = source_end_index;
     let mut pos = source_end_index;
-    while pos + WINDOW_SIZE <= hard_cap {
+    while pos < hard_cap {
+        let end = (pos + WINDOW_SIZE).min(hard_cap);
         let sum_sq: f64 = samples.iter()
-            .flat_map(|ch| ch[pos..pos + WINDOW_SIZE].iter())
+            .flat_map(|ch| ch[pos..end].iter())
             .map(|&s| s * s)
             .sum();
-        let count = samples.len() * WINDOW_SIZE;
+        let count = samples.len() * (end - pos);
         let rms = (sum_sq / count as f64).sqrt();
-        if rms < TAIL_THRESHOLD {
-            return pos;
+        if rms >= TAIL_THRESHOLD {
+            cutoff = end;
         }
-        pos += WINDOW_SIZE;
+        pos = end;
     }
-    hard_cap
+    cutoff
 }
 
 fn convert_f64_to_f32(input: &[f64], output: &mut [f32]) {
+    assert_eq!(input.len(), output.len(), "f64->f32 conversion length mismatch");
     #[cfg(target_arch = "x86_64")]
     {
-        use std::arch::x86_64::*;
         if is_x86_feature_detected!("avx") {
-            let chunks = input.len() / 4;
-            unsafe {
-                for i in 0..chunks {
-                    let src = _mm256_loadu_pd(input.as_ptr().add(i * 4));
-                    let dst = _mm256_cvtpd_ps(src);
-                    _mm_storeu_ps(output.as_mut_ptr().add(i * 4), dst);
-                }
-            }
-            for i in (chunks * 4)..input.len() {
-                output[i] = input[i] as f32;
-            }
+            // SAFETY: AVX support was verified at runtime just above.
+            unsafe { convert_f64_to_f32_avx(input, output) };
             return;
         }
     }
@@ -143,34 +185,91 @@ fn convert_f64_to_f32(input: &[f64], output: &mut [f32]) {
     }
 }
 
-fn read_wav(input_file_name: &str) -> Result<(WaveFmt, Option<Bext>, Vec<Vec<f64>>), String> {
+// Compiled with AVX enabled so the intrinsics inline into this function.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx")]
+unsafe fn convert_f64_to_f32_avx(input: &[f64], output: &mut [f32]) {
+    use std::arch::x86_64::*;
+    let chunks = input.len() / 4;
+    for i in 0..chunks {
+        let src = _mm256_loadu_pd(input.as_ptr().add(i * 4));
+        let dst = _mm256_cvtpd_ps(src);
+        _mm_storeu_ps(output.as_mut_ptr().add(i * 4), dst);
+    }
+    for i in (chunks * 4)..input.len() {
+        output[i] = input[i] as f32;
+    }
+}
+
+struct PaddedInput {
+    channels: Vec<Vec<f64>>, // [channel][sample], including pre/post padding
+    pre_pad_length: usize,
+    original_length: usize,
+}
+
+fn read_wav(input_file_name: &str) -> Result<(WaveFmt, Option<Bext>, PaddedInput), String> {
     let mut r = WaveReader::open(input_file_name).map_err(|e| format!("Error opening WAV file: {}", e))?;
     let input_format = r.format().map_err(|e| format!("Error reading format: {}", e))?;
     let bext = r.broadcast_extension().map_err(|e| format!("Error reading BWF metadata: {}", e))?;
-    let input_sample_count = r.frame_length().map_err(|e| format!("Error reading frame length: {}", e))? as usize;
-    let input_channel_count = input_format.channel_count as usize;
-    let mut frame_reader = r.audio_frame_reader().map_err(|e| format!("Error reading audio frames: {}", e))?;
-
+    let frame_count = r.frame_length().map_err(|e| format!("Error reading frame length: {}", e))? as usize;
+    let channel_count = input_format.channel_count as usize;
     let bits_per_sample = input_format.bits_per_sample;
-    let is_float = input_format.tag == bwavfile::WAVE_TAG_FLOAT;
+    let common_format = input_format.common_format();
 
-    if !is_float && bits_per_sample == 8 {
-        return Err("8-bit audio is not supported. Please use 16-bit, 24-bit, or 32-bit audio files.".to_string());
+    if channel_count == 0 {
+        return Err("WAV file has no channels".to_string());
+    }
+    if input_format.block_alignment as usize * 8 != bits_per_sample as usize * channel_count {
+        return Err(format!("unsupported packed sample layout ({} bits per sample)", bits_per_sample));
     }
 
-    let mut buffer = input_format.create_frame_buffer::<f32>(input_sample_count * input_channel_count);
-    frame_reader.read_frames::<f32>(&mut buffer).map_err(|e| format!("Error reading frames: {}", e))?;
+    // Normalise every supported format to f64 in [-1.0, 1.0] without passing
+    // through f32, so 32-bit integer and 64-bit float input keep full precision.
+    let interleaved: Vec<f64> = match (common_format, bits_per_sample) {
+        (CommonFormat::IntegerPCM, 8 | 16 | 24 | 32) => {
+            // bwavfile left-aligns every integer width into i32, so one scale fits all.
+            let mut frame_reader = r.audio_frame_reader().map_err(|e| format!("Error reading audio frames: {}", e))?;
+            let mut buffer = input_format.create_frame_buffer::<i32>(frame_count);
+            frame_reader.read_frames::<i32>(&mut buffer).map_err(|e| format!("Error reading frames: {}", e))?;
+            const I32_SCALE: f64 = 1.0 / 2147483648.0; // 2^31
+            buffer.iter().map(|&s| s as f64 * I32_SCALE).collect()
+        }
+        (CommonFormat::IeeeFloatPCM, 32) => {
+            let mut frame_reader = r.audio_frame_reader().map_err(|e| format!("Error reading audio frames: {}", e))?;
+            let mut buffer = input_format.create_frame_buffer::<f32>(frame_count);
+            frame_reader.read_frames::<f32>(&mut buffer).map_err(|e| format!("Error reading frames: {}", e))?;
+            buffer.iter().map(|&s| s as f64).collect()
+        }
+        (CommonFormat::IeeeFloatPCM, 64) => {
+            // bwavfile has no f64 sample type: read the data chunk directly.
+            // audio_frame_reader() leaves the stream positioned at the start of the data.
+            let frame_reader = r.audio_frame_reader().map_err(|e| format!("Error reading audio frames: {}", e))?;
+            let mut inner = frame_reader.into_inner();
+            let mut bytes = vec![0u8; frame_count * channel_count * 8];
+            inner.read_exact(&mut bytes).map_err(|e| format!("Error reading frames: {}", e))?;
+            bytes.chunks_exact(8)
+                .map(|b| f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+                .collect()
+        }
+        (format, bits) => {
+            return Err(format!("unsupported WAV format: {:?}, {} bits per sample", format, bits));
+        }
+    };
 
-    let mut result = vec![vec![0.0_f64; input_sample_count]; input_channel_count];
-    let mut k = 0;
-    for i in 0..input_sample_count {
-        for j in 0..input_channel_count {
-            result[j][i] = buffer[k] as f64;
-            k += 1;
+    let sample_rate = input_format.sample_rate as usize;
+    let pre_pad_length = sample_rate * PRE_PAD_SECONDS;
+    let post_pad_length = sample_rate * POST_PAD_SECONDS;
+    let total_length = pre_pad_length + frame_count + post_pad_length;
+
+    // De-interleave straight into the padded planar layout.
+    let mut channels = vec![vec![0.0_f64; total_length]; channel_count];
+    for (frame_index, frame) in interleaved.chunks_exact(channel_count).enumerate() {
+        for (channel, &sample) in frame.iter().enumerate() {
+            channels[channel][pre_pad_length + frame_index] = sample;
         }
     }
 
-    Ok((input_format, bext, result))
+    Ok((input_format, bext, PaddedInput { channels, pre_pad_length, original_length: frame_count }))
 }
 
 fn write_wav(output_path: &str, processed_samples: &Vec<Vec<f32>>, header: WaveFmt, bext: Option<Bext>) -> Result<(), String> {
@@ -210,7 +309,8 @@ fn rust_process(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
     }
 }
 
-// C++ FFI
+// C++ FFI — only linked when build.rs found C++ sources (cfg playdsp_has_cpp)
+#[cfg(playdsp_has_cpp)]
 unsafe extern "C" {
     fn cpp_process(
         input: *const f64,
@@ -220,6 +320,7 @@ unsafe extern "C" {
     );
 }
 
+#[cfg(playdsp_has_cpp)]
 pub fn cpp_process_audio_wrapper(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64>>) {
     let num_channels = input.len();
     let num_samples = input[0].len();
@@ -243,21 +344,109 @@ pub fn cpp_process_audio_wrapper(input: &Vec<Vec<f64>>, output: &mut Vec<Vec<f64
         );
     }
 
-    // Validate C++ output for non-finite values
-    if flattened_output.iter().any(|&s| !s.is_finite()) {
-        eprintln!("Warning: C++ process produced non-finite values (NaN/Inf). Clamping to 0.0.");
-        for s in flattened_output.iter_mut() {
-            if !s.is_finite() {
-                *s = 0.0;
-            }
-        }
-    }
-
     let mut k = 0;
     for sample in 0..num_samples {
         for channel in 0..num_channels {
             output[channel][sample] = flattened_output[k];
             k += 1;
         }
+    }
+}
+
+#[cfg(not(playdsp_has_cpp))]
+pub fn cpp_process_audio_wrapper(_input: &Vec<Vec<f64>>, _output: &mut Vec<Vec<f64>>) {
+    panic!("No C++ code was compiled: add cpp_process_audio.cpp to processing/cpp/");
+}
+
+// Runtime self-tests, compiled only when CI builds with
+// RUSTFLAGS="--cfg playdsp_selftest" (see ci/e2e_test.py). They never run as
+// part of a user's `playdsp test`.
+#[cfg(all(test, playdsp_selftest))]
+mod runtime_selftests {
+    use super::*;
+
+    const LENGTHS: [usize; 9] = [0, 1, 3, 4, 5, 7, 1023, 1024, 1027];
+
+    fn test_signal(len: usize) -> Vec<f64> {
+        let mut values: Vec<f64> = (0..len)
+            .map(|i| (i as f64 * 0.37).sin() * 0.9 + 1e-10 * i as f64)
+            .collect();
+        // Edge cases: signed zero, infinities, f32 overflow, f32 subnormal range.
+        let specials = [-0.0, f64::INFINITY, f64::NEG_INFINITY, 1e39, -1e39, 1e-40, -3e-45];
+        for (v, s) in values.iter_mut().zip(specials.iter()) {
+            *v = *s;
+        }
+        values
+    }
+
+    fn assert_bits_match_scalar(input: &[f64], output: &[f32]) {
+        for (i, (&o, &x)) in output.iter().zip(input.iter()).enumerate() {
+            assert_eq!(o.to_bits(), (x as f32).to_bits(), "sample {i}: {x:e} -> {o:e}");
+        }
+    }
+
+    #[test]
+    fn f32_conversion_matches_scalar_cast() {
+        for len in LENGTHS {
+            let input = test_signal(len);
+            let mut output = vec![0.0f32; len];
+            convert_f64_to_f32(&input, &mut output);
+            assert_bits_match_scalar(&input, &output);
+        }
+    }
+
+    // PLAYDSP_REQUIRE_AVX=1 (set on x86_64 CI runners) turns a skip into a
+    // failure, so CI proves the AVX path really ran.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn avx_conversion_matches_scalar_cast() {
+        if !is_x86_feature_detected!("avx") {
+            assert!(
+                std::env::var("PLAYDSP_REQUIRE_AVX").as_deref() != Ok("1"),
+                "PLAYDSP_REQUIRE_AVX=1 but this CPU does not report AVX"
+            );
+            eprintln!("AVX not available on this CPU - skipping");
+            return;
+        }
+        for len in LENGTHS {
+            let input = test_signal(len);
+            let mut output = vec![0.0f32; len];
+            unsafe { convert_f64_to_f32_avx(&input, &mut output) };
+            assert_bits_match_scalar(&input, &output);
+        }
+        eprintln!("AVX path verified");
+    }
+
+    #[test]
+    fn tail_keeps_echo_after_silent_gap() {
+        let mut samples = vec![vec![0.0_f64; 20_000]; 2];
+        for i in 5000..5100 {
+            samples[1][i] = 0.1;
+        }
+        // Windows start at 1000: ..., [4072, 5096), [5096, 6120). The echo ends inside the last one.
+        assert_eq!(detect_tail_cutoff(&samples, 1000, 20_000), 6120);
+    }
+
+    #[test]
+    fn tail_is_empty_when_output_is_silent() {
+        let samples = vec![vec![0.0_f64; 20_000]; 2];
+        assert_eq!(detect_tail_cutoff(&samples, 1000, 20_000), 1000);
+    }
+
+    #[test]
+    fn tail_ignores_signal_below_minus_144_dbfs() {
+        let samples = vec![vec![1e-8_f64; 20_000]; 1];
+        assert_eq!(detect_tail_cutoff(&samples, 1000, 20_000), 1000);
+    }
+
+    #[test]
+    fn tail_stops_at_hard_cap_including_partial_window() {
+        let samples = vec![vec![0.5_f64; 20_000]; 1];
+        assert_eq!(detect_tail_cutoff(&samples, 1000, 3500), 3500);
+    }
+
+    #[test]
+    fn runtime_helpers_have_test_defaults() {
+        assert_eq!(playdsp_sample_rate(), DEFAULT_SAMPLE_RATE as f64);
     }
 }

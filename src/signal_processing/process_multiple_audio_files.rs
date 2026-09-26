@@ -14,6 +14,11 @@ pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths
         return;
     }
 
+    if let Err(e) = std::fs::create_dir_all(&*RESULT_FOLDER) {
+        eprintln!("Could not create result folder {}: {}", RESULT_FOLDER.display(), e);
+        return;
+    }
+
     let pairs: Vec<(&String, &String)> = audio_files
         .iter()
         .flat_map(|audio| program_paths.iter().map(move |prog| (audio, prog)))
@@ -55,15 +60,22 @@ pub(crate) fn process_multiple_audio_files(audio_files: &[String], program_paths
                 cmd.arg("--meta");
             }
 
-            match cmd.status() {
-                Ok(exit_status) if exit_status.success() => {
-                    pb.println(format!("  → {}", output_file.display()));
-                }
-                Ok(exit_status) => {
-                    pb.println(format!(
-                        "  ✗ {}: runtime exited with {}",
-                        audio_file, exit_status
-                    ));
+            // Capture the child's output so its warnings are printed above the
+            // progress bar instead of being drawn over it.
+            match cmd.output() {
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    for line in stderr.lines().filter(|l| !l.trim().is_empty()) {
+                        pb.println(format!("    {}", line));
+                    }
+                    if output.status.success() {
+                        pb.println(format!("  → {}", output_file.display()));
+                    } else {
+                        pb.println(format!(
+                            "  ✗ {}: runtime exited with {}",
+                            audio_file, output.status
+                        ));
+                    }
                 }
                 Err(e) => {
                     pb.println(format!("  ✗ runtime error: {}", e));

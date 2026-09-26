@@ -1,5 +1,7 @@
 # playdsp
 
+[![CI](https://github.com/baintonaj/playdsp/actions/workflows/ci.yml/badge.svg)](https://github.com/baintonaj/playdsp/actions/workflows/ci.yml)
+
 ## Introduction
 
 After nearly 7 years of audio programming in C++/JUCE/Xcode/Pro Tools, I became frustrated with the design process of Audio Digital Signal Processing (DSP) algorithms. I would write new code, and by the time the plug-in would compile, copy, and load into Pro Tools, I would lose immediacy with what I had written. So I made this Command-Line Audio Signal Processing Framework.
@@ -20,12 +22,14 @@ High-performance tool that compiles and executes Rust and/or C++ DSP code agains
 - **Multi-file projects**: Full support for complex Rust modules and C++20 with nested subdirectories
 - **Persistent state objects**: Create classes/structs that maintain state across buffer calls
 - **Parallel processing**: Processes multiple audio files concurrently using Rayon
-- **DSP unit testing**: `playdsp test` compiles and runs standard Rust `#[test]` functions against your DSP code without needing audio files; tests Rust and C++ in parallel
+- **DSP unit testing**: `playdsp test` compiles and runs standard Rust `#[test]` functions against your DSP code without needing audio files; Rust and C++ tests run in one `cargo test` invocation (single-threaded, because DSP state is global)
 - **Portable**: No installation of source files required - main binary is self-contained
 - **BWF metadata passthrough**: Optional `--meta` flag preserves the `bext` chunk (description, originator, UMID, loudness metadata, timecode) from input files in the output — essential for Pro Tools and other pro audio applications
-- **Format support**: 16-bit, 24-bit, 32-bit integer PCM and 32-bit float WAV files
+- **Format support**: 8/16/24/32-bit integer PCM and 32/64-bit float WAV files (`.wav` or `.WAV`), decoded straight to f64 with no intermediate f32 step
 - **Fixed buffer size**: 1024 samples per buffer for all sample rates
-- **Automatic reverb tail capture**: Every run pads audio with 1s of silence before and up to 12s after; output is trimmed at -144 dBFS so reverb/delay tails are always fully captured
+- **Automatic reverb tail capture**: Every run pads audio with 1s of silence before and 12s after; output ends after the last 1024-sample window above -144 dBFS, so reverb and delay tails (including late echoes after a silent gap) are fully captured
+- **Runtime helpers**: `playdsp_sample_rate()` gives your DSP the file's sample rate; `playdsp_set_latency(n)` reports look-ahead latency so the output is shifted back into alignment (like DAW plugin delay compensation)
+- **Incremental builds**: generated runtime files are only rewritten when their content changes, so re-running with unchanged code skips compilation
 - **Cross-platform paths**: PathBuf-based path construction for Windows, macOS, and Linux
 - **Clean terminal output**: Spinner during runtime compilation (cargo output suppressed, shown only on error); per-file results printed thread-safely above a progress bar during audio processing
 - **Auto SIMD**: f64→f32 conversion uses AVX intrinsics with scalar fallback on supported hardware
@@ -224,7 +228,7 @@ See [DEPENDENCIES.md](DEPENDENCIES.md) for full documentation on dependency mana
 ### 3. Test Your DSP Code
 
 ```bash
-playdsp test          # run all tests (Rust + C++ in parallel)
+playdsp test          # run all tests (Rust + C++)
 playdsp test --rust   # run only Rust tests
 playdsp test --cpp    # run only C++ tests
 ```
@@ -302,7 +306,7 @@ playdsp new --dir /path/to/project
 
 Run DSP tests:
 ```bash
-playdsp test             # run all tests (Rust + C++ in parallel)
+playdsp test             # run all tests (Rust + C++)
 playdsp test --rust      # run only Rust tests
 playdsp test --cpp       # run only C++ tests
 ```
@@ -333,14 +337,16 @@ playdsp --code ../my-dsp-code --audio ../my-audio-files
    - Supports nested subdirectories for both languages
    - Shows indicatif spinner during cargo build; cargo output is suppressed and shown only on error; elapsed compile time printed on success
 3. **Audio Processing**:
-   - All input formats (16/24/32-bit PCM, 32/64-bit float) converted to f64
+   - All input formats (8/16/24/32-bit PCM, 32/64-bit float) converted directly to f64
    - Audio padded with 1s of silence before and 12s after; full padded signal passes through user DSP
-   - Output trimmed at the first 1024-sample window below -144 dBFS after source end (reverb tail capture)
+   - Non-finite output samples (NaN/Inf) from either language are replaced with 0.0, with one warning per file
+   - Output shifted by any latency the DSP reported via `playdsp_set_latency()`
+   - Output ends after the last 1024-sample window at or above -144 dBFS after source end (reverb tail capture)
    - Per-file results printed above the progress bar via `pb.println()` (thread-safe); progress bar tracks total file count with elapsed time
 4. **Output**: Processed files saved as `{filename}_processed_{timestamp}_{rs|cpp}.wav` (32-bit float)
 
 **Recompiling After Code Changes:**
-- Runtime automatically recompiles when it detects code in `rust/` or `cpp/` folders
+- Runtime automatically recompiles when it detects code in `rust/` or `cpp/` folders; if nothing changed, cargo finishes almost instantly
 - Or delete `../audio/.playdsp_runtime/` to force full recompilation
 - Or use `--code ./processing` to explicitly trigger recompilation
 
@@ -417,20 +423,30 @@ struct State {
 
 The static `input_vector` and `output_vector` in `cpp_process()` are reused every call, avoiding repeated heap allocation. All four statics (`state_mutex`, `state`, `input_vector`, `output_vector`) are protected by `std::scoped_lock`.
 
+## Runtime Helpers
+
+The runtime provides two functions your DSP can call, in either language:
+
+| Rust | C++ | Purpose |
+|---|---|---|
+| `crate::playdsp_sample_rate() -> f64` | `extern "C" double playdsp_sample_rate();` | Sample rate of the file being processed (48000 under `playdsp test`) |
+| `crate::playdsp_set_latency(samples: usize)` | `extern "C" void playdsp_set_latency(size_t samples);` | Report processing latency; the output is shifted back by this many samples |
+
+The C++ starter file already declares both functions.
+
 ## Technical Details
 
 - **C++ Standard**: C++20
 - **Optimization**: Platform-conditional — `-O3` on GCC/Clang; `/O2` + `/EHsc` on MSVC. Linux also adds `-fPIC`.
-- **SIMD**: AVX intrinsics for f64→f32 sample conversion; scalar fallback on non-AVX hardware
+- **SIMD**: AVX intrinsics for f64→f32 sample conversion in a `#[target_feature(enable = "avx")]` function, selected at runtime; scalar fallback on non-AVX and non-x86 hardware
 - **Release profile**: LTO + single codegen unit for the runtime binary
 - **MSRV**: Rust 1.85 (required for edition 2024)
-- **Input Audio Formats**: 16/24/32-bit integer PCM, 32-bit float WAV (bwavfile handles conversion)
+- **Input Audio Formats**: 8/16/24/32-bit integer PCM and 32-bit float via bwavfile; 64-bit float read directly from the data chunk
 - **Processing Format**: All audio automatically converted to 64-bit float (-1.0 to 1.0)
 - **Output Format**: 32-bit float WAV (IEEE 754)
 - **BWF Metadata**: `bext` chunk (originator, description, UMID, loudness tags, timecode) read on every run; written to output only when `--meta` is passed
 - **Parallelism**: Rayon for concurrent file processing
 - **Buffer Size**: Fixed at 1024 samples per buffer
-- **8-bit audio**: Not supported
 
 ## Error Handling
 
@@ -439,7 +455,18 @@ The tool provides clear error messages for:
 - Compilation errors in user code
 - Audio file read/write failures
 - Incorrect DSP function signatures
-- Unsupported audio formats (8-bit)
+- Unsupported audio formats (compressed or non-PCM WAV)
+
+## Testing playdsp Itself
+
+```bash
+make test    # CLI unit tests (cargo test)
+make e2e     # release build + end-to-end suite (python3 ci/e2e_test.py)
+```
+
+`ci/e2e_test.py` uses only the Python standard library. It creates throwaway projects with `playdsp new`, writes WAV files in every supported format, runs the real binary, and checks the output sample by sample. It covers gain accuracy, Rust vs C++ null tests, tail capture, latency compensation, Rust-only projects, `--code` import, `playdsp new` safety, no-op rebuilds, and the runtime self-tests (AVX vs scalar conversion, tail detection).
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the same suite on Linux x86_64, Windows x86_64 (MSVC), Linux arm64, and macOS arm64, plus an MSRV job on Rust 1.85. On the x86_64 runners `PLAYDSP_REQUIRE_AVX=1` makes the AVX self-test fail instead of skip, so CI proves the SIMD path runs.
 
 ## Requirements
 
@@ -449,11 +476,44 @@ The tool provides clear error messages for:
 
 ## Version History
 
+### Unreleased
+
+**Audio fixes**
+- 64-bit float WAV input no longer panics (bwavfile has no f64 reader, so the data chunk is read directly).
+- 32-bit integer input keeps full precision: samples are decoded via i32 to f64 instead of through f32.
+- 8-bit WAV input is now supported.
+- Tail capture keeps late echoes: output ends after the *last* window above -144 dBFS rather than the first quiet one.
+- NaN/Inf protection now covers Rust as well as C++, with one summary warning per file instead of one per buffer.
+- Unknown runtime mode and unsupported formats return clear errors instead of silent zeros or panics.
+- Runtime no longer holds whole-file block arrays; processing uses two reusable 1024-sample buffers.
+
+**New runtime helpers**
+- `playdsp_sample_rate()` and `playdsp_set_latency()` for Rust and C++ (see Runtime Helpers).
+
+**Tooling fixes**
+- Runtime builds and runs with no C++ code (previously failed to link with an undefined `cpp_process` symbol).
+- `--code` signature check is whitespace-insensitive (it previously rejected normally formatted code, including the starter files).
+- `--code` no longer compiles the runtime twice.
+- `playdsp new` no longer overwrites existing DSP or test files.
+- `.WAV` (uppercase) files are processed; `--audio` only replaces WAV files in `source/`.
+- Dependency detection handles `use x as y`, `pub use`, `use ::x`, `extern crate`, and sibling module files; test files are scanned during `playdsp test`.
+- Unchanged code no longer triggers a rebuild; C++ file additions/removals are still detected.
+- `playdsp test` runs single-threaded and skips `cpp_` tests when there is no C++ code.
+- `-r -c` together means both languages; runtime warnings print above the progress bar instead of over it.
+- Unit tests added for signature validation, dependency detection, and template patching (`cargo test`).
+- Windows: template line endings are normalised before patching. With `core.autocrlf` the CRLF template never matched the patch markers, so user Rust code was silently ignored. Missing markers are now an error.
+
+**CI**
+- GitHub Actions on Linux x86_64, Windows x86_64 (MSVC), Linux arm64, macOS arm64, and MSRV 1.85.
+- Portable end-to-end suite (`ci/e2e_test.py`, `make e2e`) and CI-only runtime self-tests (`--cfg playdsp_selftest`).
+
+---
+
 ### v0.4.0 (March 2026)
 
 **DSP unit testing**
 - **`playdsp test` subcommand**: recompiles the runtime in test mode and runs standard Rust `#[test]` functions. Full `cargo test` output is shown — panics, assertion failures, and line numbers are all visible.
-- **`--rust` / `--cpp` flags on `test`**: `playdsp test --rust` runs only Rust tests; `playdsp test --cpp` runs only C++ tests; default runs both in parallel (cargo test is multi-threaded).
+- **`--rust` / `--cpp` flags on `test`**: `playdsp test --rust` runs only Rust tests; `playdsp test --cpp` runs only C++ tests; default runs both.
 - **Starter test files**: `playdsp new` now writes `processing/tests/rust_tests.rs` and `processing/tests/cpp_tests.rs` with three ready-to-run tests each — verifying the default −12 dB gain, silence-in/silence-out, and buffer dimension preservation.
 - **C++ tests via safe wrapper**: C++ test files call `crate::cpp_process_audio_wrapper()` directly, the same safe interleave/deinterleave wrapper used during audio file processing — no raw pointer arithmetic in test code.
 - **File naming convention**: files in `tests/` prefixed with `cpp_` are treated as C++ tests; all others are Rust tests. This drives `--rust`/`--cpp` filtering.

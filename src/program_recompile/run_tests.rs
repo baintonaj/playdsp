@@ -1,4 +1,5 @@
 use crate::constants::constants::*;
+use crate::file_processing::code_processing::get_program_files::has_cpp_files;
 use std::path::Path;
 use std::process::{Command, Stdio, exit};
 use std::{fs, io};
@@ -12,7 +13,7 @@ pub(crate) fn run_tests(rust_only: bool, cpp_only: bool) {
 
     println!("DSP code detected - recompiling for test...");
 
-    if let Err(e) = setup_runtime_project(&runtime_dir, processing_dir) {
+    if let Err(e) = setup_runtime_project(&runtime_dir, processing_dir, true) {
         eprintln!("Failed to setup runtime project: {}", e);
         exit(1);
     }
@@ -27,8 +28,12 @@ pub(crate) fn run_tests(rust_only: bool, cpp_only: bool) {
         exit(1);
     }
 
+    // Single-threaded: DSP state is a global singleton, so parallel tests would
+    // interleave calls into the same filter/delay state and become flaky.
     let status = Command::new("cargo")
         .arg("test")
+        .arg("--")
+        .arg("--test-threads=1")
         .current_dir(&runtime_dir)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -51,6 +56,13 @@ fn inject_test_files(runtime_dir: &Path, rust_only: bool, cpp_only: bool) -> io:
     }
 
     let runtime_user_code_dir = runtime_dir.join("src/user_code");
+    if !RUST_FOLDER.join("rust_process_audio.rs").exists() {
+        // No Rust DSP code was injected, so there is no user_code module to attach tests to.
+        eprintln!("No rust_process_audio.rs found in processing/rust/ - skipping test injection");
+        return Ok(());
+    }
+    // cpp_process() only exists when C++ sources were compiled.
+    let cpp_available = has_cpp_files(&CPP_FOLDER);
     let mut test_mod_names: Vec<String> = Vec::new();
 
     if let Ok(entries) = fs::read_dir(tests_dir) {
@@ -70,6 +82,10 @@ fn inject_test_files(runtime_dir: &Path, rust_only: bool, cpp_only: bool) -> io:
                     continue;
                 }
                 if cpp_only && !is_cpp_test {
+                    continue;
+                }
+                if is_cpp_test && !cpp_available {
+                    println!("Skipping {}: no C++ code in processing/cpp/", entry.file_name().to_string_lossy());
                     continue;
                 }
 
